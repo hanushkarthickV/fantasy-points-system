@@ -12,7 +12,15 @@ DATA_DIR.mkdir(exist_ok=True)
 CREDENTIALS_DIR.mkdir(exist_ok=True)
 
 # ── Google Sheets ──────────────────────────────────────────────────────────────
-GOOGLE_CREDENTIALS_PATH = CREDENTIALS_DIR / "google_service_account.json"
+# Look for credentials in multiple locations (local dev → Render secret files)
+_CRED_CANDIDATES = [
+    CREDENTIALS_DIR / "google_service_account.json",        # local dev
+    Path("/etc/secrets/google_service_account.json"),        # Render secret files
+]
+GOOGLE_CREDENTIALS_PATH = next(
+    (p for p in _CRED_CANDIDATES if p.exists()),
+    _CRED_CANDIDATES[0],  # fallback to local path (will error clearly at runtime)
+)
 SPREADSHEET_ID = "1VP_iSR_LoJRyyGWENSuc8gKz1YbphD0htKd-w66mvFI"
 WORKSHEET_NAME = "IPL_2026_Auction_List"
 PLAYER_NAME_COLUMN = "Player Name"

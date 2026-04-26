@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: fantasy-points-system
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: BROWSER_HEADLESS
+        value: "true"
+    disk:
+      name: data
+      mountPath: /app/data
+      sizeGB: 1

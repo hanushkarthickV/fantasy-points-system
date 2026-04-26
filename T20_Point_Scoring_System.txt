@@ -1,0 +1,55 @@
+T20 POINT SCORING SYSTEM
+
+BATTING POINTS
+--------------------------------------------------
+Action                                     Points
+Runs                                       +1
+Four Bonus                                 +4
+Six Bonus                                  +6
+25 Runs Bonus                              +4
+50 Runs Bonus                              +8
+75 Runs Bonus                              +12
+100 Runs Bonus                             +16
+Dismissal for Duck (excluding bowlers)     -2
+
+STRIKE RATE
+(Min 20 runs scored OR 10 balls played)
+170 and above                              +6
+150 to 169.99                              +4
+130 to 149.99                              +2
+70 to 129.99                               0
+60 to 69.99                                -2
+50 to 59.99                                -4
+Less than 50                               -6
+
+
+BOWLING POINTS
+--------------------------------------------------
+Action                                     Points
+Wicket (except run-out)                    +30
+Maiden over Bonus                          +12
+LBW/Bowled Bonus                           +8
+3-wicket haul Bonus                        +4
+4-wicket haul Bonus                        +8
+5-wicket haul Bonus                        +12
+Dot Ball Bonus                             +1
+
+ECONOMY RATE
+(Minimum 2 overs to be bowled)
+Less than 5                                +6
+5.00 to 5.99                               +4
+6.00 to 6.99                               +2
+7.00 to 9.99                               0
+10.00 to 10.99                             -2
+11.00 to 11.99                             -4
+12.00 and above                            -6
+
+
+FIELDING POINTS
+--------------------------------------------------
+Action                                     Points
+Catch                                      +8
+3 catch bonus                              +4
+Stumping                                   +12
+Run-out (Direct)                           +12
+Run-out (Multiple players involved)        +6

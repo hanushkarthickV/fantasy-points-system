@@ -1,0 +1,29 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Data & credentials (mounted as volumes)
+data/
+credentials/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docs & meta
+*.md
+LICENSE
+.editorconfig

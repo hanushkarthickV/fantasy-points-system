@@ -23,3 +23,25 @@ export async function updateSheet(
   });
   return data;
 }
+
+export async function editPlayers(
+  matchId: string,
+  edits: { original_name: string; new_name?: string; new_total_points?: number }[]
+): Promise<MatchPoints> {
+  const { data } = await client.patch<MatchPoints>("/edit-players", {
+    match_id: matchId,
+    edits,
+  });
+  return data;
+}
+
+export async function retryUnmatched(
+  matchId: string,
+  nameCorrections: Record<string, string>
+): Promise<SheetUpdateResponse> {
+  const { data } = await client.post<SheetUpdateResponse>("/retry-unmatched", {
+    match_id: matchId,
+    name_corrections: nameCorrections,
+  });
+  return data;
+}

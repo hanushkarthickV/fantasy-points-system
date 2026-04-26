@@ -150,6 +150,72 @@ class SheetService:
             unmatched_players=unmatched,
         )
 
+    # ── Retry Unmatched (exact name match) ─────────────────────────────────────
+
+    def update_specific_players(
+        self,
+        match_points: MatchPoints,
+        name_corrections: dict[str, str],
+    ) -> SheetUpdateResponse:
+        """
+        Update sheet for specific players using exact corrected names.
+        name_corrections: {scraped_display_name: exact_sheet_name}
+        """
+        self._ensure_connected()
+        records = self._sheet.get_all_records()
+        points_col = self._sheet.find_column_index(POINTS_COLUMN)
+        spec_col = self._sheet.find_column_index(SPECIALISM_COLUMN)
+
+        # Build sheet row lookup
+        sheet_lookup: dict[str, tuple[int, dict]] = {}
+        for i, rec in enumerate(records):
+            pname = str(rec.get(PLAYER_NAME_COLUMN, "")).strip()
+            if pname:
+                sheet_lookup[pname] = (i + 2, rec)
+
+        # Build player points lookup from match  (strip " (best: ...)" from display name)
+        player_points_map: dict[str, int] = {}
+        for p in match_points.players:
+            player_points_map[p.name] = p.total_points
+
+        updated: list[PlayerUpdateResult] = []
+        still_unmatched: list[str] = []
+        batch_updates: list[dict] = []
+
+        for display_name, corrected_name in name_corrections.items():
+            # Extract the actual scraped name (strip " (best: ..., score: ..)" suffix)
+            scraped_name = display_name.split(" (best:")[0].strip() if " (best:" in display_name else display_name
+
+            pts = player_points_map.get(scraped_name, 0)
+            if corrected_name in sheet_lookup:
+                row_idx, rec = sheet_lookup[corrected_name]
+                prev_points = _safe_float(rec.get(POINTS_COLUMN, 0))
+                new_points = prev_points + pts
+                specialism = str(rec.get(SPECIALISM_COLUMN, ""))
+
+                batch_updates.append({"row": row_idx, "col": points_col, "value": new_points})
+                updated.append(PlayerUpdateResult(
+                    scraped_name=scraped_name,
+                    matched_name=corrected_name,
+                    match_score=100,
+                    previous_points=prev_points,
+                    added_points=pts,
+                    new_points=new_points,
+                    specialism=specialism,
+                ))
+            else:
+                still_unmatched.append(f"{scraped_name} → '{corrected_name}' not found in sheet")
+
+        if batch_updates:
+            self._sheet.batch_update_cells(batch_updates)
+            logger.info("Retry: updated %d players in sheet", len(batch_updates))
+
+        return SheetUpdateResponse(
+            match_id=match_points.match_id,
+            updated_players=updated,
+            unmatched_players=still_unmatched,
+        )
+
     # ── Fuzzy Matching ─────────────────────────────────────────────────────────
 
     @staticmethod

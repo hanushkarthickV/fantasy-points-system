@@ -1,12 +1,34 @@
-import { CheckCircle2, AlertTriangle, RotateCcw } from "lucide-react";
+import { useState } from "react";
+import { CheckCircle2, AlertTriangle, RotateCcw, Loader2, Send } from "lucide-react";
 import type { SheetUpdateResponse } from "../types";
 
 interface Props {
   result: SheetUpdateResponse;
   onReset: () => void;
+  onRetryUnmatched: (corrections: Record<string, string>) => Promise<void>;
+  retryLoading: boolean;
 }
 
-export default function UpdateResults({ result, onReset }: Props) {
+export default function UpdateResults({ result, onReset, onRetryUnmatched, retryLoading }: Props) {
+  // Name corrections: {display_name_from_unmatched: user_typed_correct_name}
+  const [corrections, setCorrections] = useState<Record<string, string>>({});
+
+  const handleCorrectionChange = (unmatchedEntry: string, value: string) => {
+    setCorrections((prev) => ({ ...prev, [unmatchedEntry]: value }));
+  };
+
+  const handleRetry = () => {
+    // Only send non-empty corrections
+    const nonEmpty = Object.fromEntries(
+      Object.entries(corrections).filter(([, v]) => v.trim())
+    );
+    if (Object.keys(nonEmpty).length > 0) {
+      onRetryUnmatched(nonEmpty);
+    }
+  };
+
+  const filledCorrections = Object.values(corrections).filter((v) => v.trim()).length;
+
   return (
     <div className="space-y-6">
       {/* Success Banner */}
@@ -74,20 +96,52 @@ export default function UpdateResults({ result, onReset }: Props) {
         </div>
       )}
 
-      {/* Unmatched Players */}
+      {/* Unmatched Players — with correction inputs */}
       {result.unmatched_players.length > 0 && (
         <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-2xl p-6">
           <div className="flex items-center gap-2 mb-3">
             <AlertTriangle className="w-5 h-5 text-yellow-400" />
             <h3 className="text-lg font-semibold text-yellow-300">Unmatched Players</h3>
           </div>
-          <ul className="space-y-1">
-            {result.unmatched_players.map((name) => (
-              <li key={name} className="text-yellow-200/70 text-sm">
-                {name}
-              </li>
-            ))}
-          </ul>
+          <p className="text-yellow-200/60 text-sm mb-4">
+            These players could not be matched in the spreadsheet. Type the correct name from the sheet to update them.
+          </p>
+          <div className="space-y-3">
+            {result.unmatched_players.map((entry) => {
+              const scrapedName = entry.split(" (best:")[0].trim();
+              return (
+                <div key={entry} className="flex items-center gap-3">
+                  <span className="text-yellow-200/80 text-sm w-48 shrink-0 truncate" title={entry}>
+                    {scrapedName}
+                  </span>
+                  <span className="text-gray-500 text-sm shrink-0">&rarr;</span>
+                  <input
+                    type="text"
+                    placeholder="Correct name from sheet"
+                    value={corrections[entry] || ""}
+                    onChange={(e) => handleCorrectionChange(entry, e.target.value)}
+                    className="flex-1 px-3 py-1.5 rounded-lg bg-gray-800 border border-gray-600 text-white text-sm
+                               placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                  />
+                </div>
+              );
+            })}
+          </div>
+          {filledCorrections > 0 && (
+            <button
+              onClick={handleRetry}
+              disabled={retryLoading}
+              className="mt-4 flex items-center gap-2 px-5 py-2 rounded-lg bg-yellow-600 hover:bg-yellow-500
+                         disabled:opacity-50 text-white font-semibold text-sm transition"
+            >
+              {retryLoading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Send className="w-4 h-4" />
+              )}
+              Update {filledCorrections} Player(s)
+            </button>
+          )}
         </div>
       )}
 

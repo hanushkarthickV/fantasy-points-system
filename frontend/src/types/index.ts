@@ -101,6 +101,7 @@ export interface PlayerPoints {
   batting: BattingPointsBreakdown | null;
   bowling: BowlingPointsBreakdown | null;
   fielding: FieldingPointsBreakdown | null;
+  playing_xi_bonus: number;
   total_points: number;
 }
 

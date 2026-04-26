@@ -1,13 +1,32 @@
 from __future__ import annotations
 
+import re
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+
+# ── URL validation pattern ─────────────────────────────────────────────────────
+
+_ESPNCRICINFO_PATTERN = re.compile(
+    r"https?://(?:www\.)?espncricinfo\.com/.+/full-scorecard"
+)
 
 
 # ── Scraping Input / Output ────────────────────────────────────────────────────
 
 class ScrapeRequest(BaseModel):
     url: str
+
+    @field_validator("url")
+    @classmethod
+    def validate_espncricinfo_url(cls, v: str) -> str:
+        v = v.strip()
+        if not _ESPNCRICINFO_PATTERN.match(v):
+            raise ValueError(
+                "URL must be a valid ESPNcricinfo full-scorecard URL "
+                "(e.g. https://www.espncricinfo.com/series/.../full-scorecard)"
+            )
+        return v
 
 
 class CalculatePointsRequest(BaseModel):
@@ -121,6 +140,7 @@ class PlayerPoints(BaseModel):
     batting: Optional[BattingPointsBreakdown] = None
     bowling: Optional[BowlingPointsBreakdown] = None
     fielding: Optional[FieldingPointsBreakdown] = None
+    playing_xi_bonus: int = 0
     total_points: int = 0
 
 
@@ -145,3 +165,21 @@ class SheetUpdateResponse(BaseModel):
     match_id: str
     updated_players: list[PlayerUpdateResult]
     unmatched_players: list[str]
+
+
+# ── Player Edit / Retry Unmatched ─────────────────────────────────────────────
+
+class PlayerEdit(BaseModel):
+    original_name: str
+    new_name: Optional[str] = None
+    new_total_points: Optional[int] = None
+
+
+class EditPlayersRequest(BaseModel):
+    match_id: str
+    edits: list[PlayerEdit]
+
+
+class RetryUnmatchedRequest(BaseModel):
+    match_id: str
+    name_corrections: dict[str, str]  # {scraped_display_name: corrected_sheet_name}

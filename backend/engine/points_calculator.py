@@ -73,15 +73,22 @@ def calculate_match_points(
             pp.fielding = calculate_fielding_points(entry)
             pp.total_points += pp.fielding.total
 
+    # ── Playing XI bonus: +4 for every player who featured ───────────────
+    PLAYING_XI_BONUS = 4
     for pp in player_map.values():
-        logger.debug("[CALC] %s (%s): bat=%s bowl=%s field=%s total=%d",
+        pp.playing_xi_bonus = PLAYING_XI_BONUS
+        pp.total_points += PLAYING_XI_BONUS
+
+    for pp in player_map.values():
+        logger.debug("[CALC] %s (%s): bat=%s bowl=%s field=%s xi=%d total=%d",
                      pp.name, pp.team,
                      pp.batting.total if pp.batting else '-',
                      pp.bowling.total if pp.bowling else '-',
                      pp.fielding.total if pp.fielding else '-',
+                     pp.playing_xi_bonus,
                      pp.total_points)
 
-    logger.info("[CALC] Done — %d players scored", len(player_map))
+    logger.info("[CALC] Done — %d players scored (incl. +%d Playing XI bonus each)", len(player_map), PLAYING_XI_BONUS)
     return MatchPoints(
         match_id=metadata.match_id,
         players=list(player_map.values()),

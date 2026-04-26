@@ -16,6 +16,7 @@ from backend.engine.points_calculator import calculate_match_points
 from backend.models.schemas import (
     MatchMetadata,
     MatchPoints,
+    PlayerEdit,
     SheetUpdateResponse,
 )
 from backend.scraper.scorecard_scraper import scrape_scorecard
@@ -70,6 +71,46 @@ class MatchService:
             len(result.updated_players),
             len(result.unmatched_players),
         )
+        return result
+
+    # ── Step 4: Edit Players ───────────────────────────────────────────────────
+
+    def edit_players(self, match_id: str, edits: list[PlayerEdit]) -> MatchPoints:
+        """Apply name/points edits to the saved points JSON and re-save."""
+        points = self._load_points(match_id)
+        player_map = {p.name: p for p in points.players}
+
+        for edit in edits:
+            player = player_map.get(edit.original_name)
+            if not player:
+                logger.warning("Edit target '%s' not found in match %s", edit.original_name, match_id)
+                continue
+            if edit.new_name is not None and edit.new_name != edit.original_name:
+                del player_map[edit.original_name]
+                player.name = edit.new_name
+                player_map[edit.new_name] = player
+            if edit.new_total_points is not None:
+                player.total_points = edit.new_total_points
+
+        points.players = list(player_map.values())
+        self._save_match_json(match_id, "points.json", points.model_dump())
+        logger.info("Edited and saved points for match %s", match_id)
+        return points
+
+    # ── Step 5: Retry Unmatched ──────────────────────────────────────────────
+
+    def retry_unmatched(
+        self, match_id: str, name_corrections: dict[str, str]
+    ) -> SheetUpdateResponse:
+        """
+        Re-attempt sheet update for unmatched players using corrected names.
+        name_corrections: {scraped_display_name: exact_sheet_name}
+        """
+        points = self._load_points(match_id)
+        result = self._sheet_service.update_specific_players(
+            points, name_corrections
+        )
+        self._save_match_json(match_id, "retry_result.json", result.model_dump())
         return result
 
     # ── Loaders ────────────────────────────────────────────────────────────────

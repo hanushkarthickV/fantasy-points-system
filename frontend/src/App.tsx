@@ -4,7 +4,13 @@ import UrlInput from "./components/UrlInput";
 import ScorecardReview from "./components/ScorecardReview";
 import PointsReview from "./components/PointsReview";
 import UpdateResults from "./components/UpdateResults";
-import { scrapeScorecard, calculatePoints, updateSheet } from "./services/api";
+import {
+  scrapeScorecard,
+  calculatePoints,
+  updateSheet,
+  editPlayers,
+  retryUnmatched,
+} from "./services/api";
 import type { MatchMetadata, MatchPoints, SheetUpdateResponse } from "./types";
 
 type Step = "input" | "review_scorecard" | "review_points" | "done";
@@ -21,6 +27,7 @@ const STEP_ORDER: Step[] = ["input", "review_scorecard", "review_points", "done"
 export default function App() {
   const [step, setStep] = useState<Step>("input");
   const [loading, setLoading] = useState(false);
+  const [retryLoading, setRetryLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [metadata, setMetadata] = useState<MatchMetadata | null>(null);
@@ -35,7 +42,14 @@ export default function App() {
       setMetadata(data);
       setStep("review_scorecard");
     } catch (err: any) {
-      setError(err?.response?.data?.detail || err.message || "Scraping failed");
+      const detail = err?.response?.data?.detail;
+      if (typeof detail === "string") {
+        setError(detail);
+      } else if (Array.isArray(detail)) {
+        setError(detail.map((d: any) => d.msg || d).join("; "));
+      } else {
+        setError(err.message || "Scraping failed");
+      }
     } finally {
       setLoading(false);
     }
@@ -68,6 +82,51 @@ export default function App() {
       setError(err?.response?.data?.detail || err.message || "Sheet update failed");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleEditPlayers = async (
+    edits: { original_name: string; new_name?: string; new_total_points?: number }[]
+  ) => {
+    if (!points) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const updated = await editPlayers(points.match_id, edits);
+      setPoints(updated);
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || err.message || "Edit failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRetryUnmatched = async (corrections: Record<string, string>) => {
+    if (!updateResult) return;
+    setRetryLoading(true);
+    setError(null);
+    try {
+      const retryResult = await retryUnmatched(updateResult.match_id, corrections);
+      // Merge results: add newly updated players, remove them from unmatched
+      const correctedKeys = new Set(Object.keys(corrections));
+      const remainingUnmatched = updateResult.unmatched_players.filter(
+        (u) => !correctedKeys.has(u)
+      );
+      setUpdateResult({
+        ...updateResult,
+        updated_players: [
+          ...updateResult.updated_players,
+          ...retryResult.updated_players,
+        ],
+        unmatched_players: [
+          ...remainingUnmatched,
+          ...retryResult.unmatched_players,
+        ],
+      });
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || err.message || "Retry failed");
+    } finally {
+      setRetryLoading(false);
     }
   };
 
@@ -164,11 +223,17 @@ export default function App() {
           <PointsReview
             points={points}
             onApprove={handleUpdateSheet}
+            onEditPlayers={handleEditPlayers}
             loading={loading}
           />
         )}
         {step === "done" && updateResult && (
-          <UpdateResults result={updateResult} onReset={handleReset} />
+          <UpdateResults
+            result={updateResult}
+            onReset={handleReset}
+            onRetryUnmatched={handleRetryUnmatched}
+            retryLoading={retryLoading}
+          />
         )}
       </main>
     </div>

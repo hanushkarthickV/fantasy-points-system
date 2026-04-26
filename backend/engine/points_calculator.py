@@ -138,17 +138,16 @@ def calculate_batting_points(
 
 
 def _milestone_bonus(runs: int) -> int:
-    """Cumulative milestone bonuses: 25→+4, 50→+8, 75→+12, 100→+16."""
-    bonus = 0
+    """Highest-tier milestone bonus: 25→+4, 50→+8, 75→+12, 100→+16."""
     if runs >= 100:
-        bonus += 16
+        return 16
     if runs >= 75:
-        bonus += 12
+        return 12
     if runs >= 50:
-        bonus += 8
+        return 8
     if runs >= 25:
-        bonus += 4
-    return bonus
+        return 4
+    return 0
 
 
 def _strike_rate_points(sr: float) -> int:
@@ -209,15 +208,14 @@ def calculate_bowling_points(
 
 
 def _haul_bonus(wickets: int) -> int:
-    """Cumulative haul bonuses: 3W→+4, 4W→+8, 5W→+12."""
-    bonus = 0
+    """Highest-tier haul bonus: 3W→+4, 4W→+8, 5W→+12."""
     if wickets >= 5:
-        bonus += 12
+        return 12
     if wickets >= 4:
-        bonus += 8
+        return 8
     if wickets >= 3:
-        bonus += 4
-    return bonus
+        return 4
+    return 0
 
 
 def _economy_rate_points(econ: float) -> int:

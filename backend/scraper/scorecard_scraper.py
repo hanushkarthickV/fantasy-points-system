@@ -28,28 +28,47 @@ logger = get_logger(__name__)
 
 # ── Public API ─────────────────────────────────────────────────────────────────
 
-def scrape_scorecard(url: str) -> MatchMetadata:
+# Type alias for progress callback: (step: str, message: str) -> None
+ProgressCallback = Optional[callable]
+
+
+def scrape_scorecard(
+    url: str,
+    on_progress: ProgressCallback = None,
+) -> MatchMetadata:
     """
     Open the ESPNcricinfo scorecard at *url*, parse it, and return a
     fully-populated ``MatchMetadata`` object.
 
     Retries up to SCRAPE_MAX_RETRIES times on timeout/page-load failures.
+    If *on_progress* is provided, it is called with (step, message) at each stage.
     """
+
+    def emit(step: str, message: str) -> None:
+        if on_progress:
+            on_progress(step, message)
+
     match_id = _extract_match_id(url)
     logger.info("[SCRAPER] Starting scrape for match_id=%s, url=%s", match_id, url)
+    emit("init", f"Match ID {match_id} — preparing to scrape")
 
     last_exc: Exception | None = None
     for attempt in range(1, SCRAPE_MAX_RETRIES + 1):
         try:
+            emit("browser_launch", f"Launching Chrome browser (attempt {attempt}/{SCRAPE_MAX_RETRIES})...")
             with BrowserWrapper() as browser:
+                emit("page_load", "Navigating to ESPNcricinfo scorecard...")
                 browser.open(url)
-                logger.debug("[SCRAPER] Page loaded, waiting for scorecard table...")
+                emit("waiting_render", "Waiting for scorecard table to render...")
                 browser.wait_for_element("table.ci-scorecard-table")
+                emit("extracting_html", "Scorecard visible — extracting page HTML...")
                 html = browser.get_page_source()
                 logger.info("[SCRAPER] Got page source (%d chars) on attempt %d", len(html), attempt)
 
-            result = _parse_scorecard_html(html, match_id, url)
+            emit("parse_batting", "Parsing batting data...")
+            result = _parse_scorecard_html(html, match_id, url, on_progress=on_progress)
             logger.info("[SCRAPER] Parse complete: %d innings, teams: %s vs %s", len(result.innings), result.team1, result.team2)
+            emit("complete", f"Done — {len(result.innings)} innings, {result.team1} vs {result.team2}")
             return result
         except Exception as exc:
             last_exc = exc
@@ -57,6 +76,7 @@ def scrape_scorecard(url: str) -> MatchMetadata:
             is_timeout = "timeout" in error_msg or "timed out" in error_msg
             if is_timeout and attempt < SCRAPE_MAX_RETRIES:
                 wait_secs = attempt * 3
+                emit("retry", f"Timeout on attempt {attempt}/{SCRAPE_MAX_RETRIES}, retrying in {wait_secs}s...")
                 logger.warning(
                     "[SCRAPER] Attempt %d/%d timed out, retrying in %ds...",
                     attempt, SCRAPE_MAX_RETRIES, wait_secs,
@@ -80,8 +100,18 @@ def parse_scorecard_from_html(html: str, url: str) -> MatchMetadata:
 
 # ── Internal Parsing ───────────────────────────────────────────────────────────
 
-def _parse_scorecard_html(html: str, match_id: str, url: str) -> MatchMetadata:
+def _parse_scorecard_html(
+    html: str,
+    match_id: str,
+    url: str,
+    on_progress: ProgressCallback = None,
+) -> MatchMetadata:
     """Master parse routine that assembles all innings data."""
+
+    def emit(step: str, message: str) -> None:
+        if on_progress:
+            on_progress(step, message)
+
     doc = ElementWrapper(html)
 
     # Match-level info
@@ -114,6 +144,7 @@ def _parse_scorecard_html(html: str, match_id: str, url: str) -> MatchMetadata:
     for idx, container in enumerate(innings_divs):
         team_name = team1 if idx == 0 else team2
         logger.info("[SCRAPER] Parsing innings %d for team: %s", idx + 1, team_name)
+        emit("parse_innings", f"Parsing innings {idx + 1} — {team_name}...")
         innings_data = _parse_innings(container, team_name)
         logger.info(
             "[SCRAPER]   Batting: %d entries, Bowling: %d entries, Fielding: %d entries, DNB: %d",
@@ -123,6 +154,7 @@ def _parse_scorecard_html(html: str, match_id: str, url: str) -> MatchMetadata:
         innings_list.append(innings_data)
 
     # ── Post-process: resolve short names in dismissals & fielding ────────
+    emit("resolve_names", "Resolving short player names to full names...")
     _resolve_short_names(innings_list)
 
     return MatchMetadata(

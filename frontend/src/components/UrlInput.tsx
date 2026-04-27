@@ -1,43 +1,32 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Globe, Loader2, ArrowRight, AlertCircle, CheckCircle2 } from "lucide-react";
 
 const ESPNCRICINFO_RE = /^https?:\/\/(?:www\.)?espncricinfo\.com\/.+\/full-scorecard/;
 
-const PROGRESS_MESSAGES = [
-  "Connecting to ESPNcricinfo...",
-  "Loading scorecard page...",
-  "Waiting for page to render...",
-  "Parsing batting data...",
-  "Parsing bowling data...",
-  "Extracting fielding & dismissals...",
-  "Resolving player names...",
-  "Building match metadata...",
-  "Almost done...",
-];
+// Map backend step names to a rough progress percentage
+const STEP_PROGRESS: Record<string, number> = {
+  init: 5,
+  browser_launch: 10,
+  page_load: 25,
+  waiting_render: 45,
+  extracting_html: 60,
+  parse_batting: 70,
+  parse_innings: 80,
+  resolve_names: 90,
+  complete: 100,
+  retry: 30,
+};
 
 interface Props {
   onScrape: (url: string) => Promise<void>;
   loading: boolean;
+  progressStep?: string;
+  progressMessage?: string;
 }
 
-export default function UrlInput({ onScrape, loading }: Props) {
+export default function UrlInput({ onScrape, loading, progressStep, progressMessage }: Props) {
   const [url, setUrl] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
-  const [progressIdx, setProgressIdx] = useState(0);
-
-  // Cycle through progress messages while loading
-  useEffect(() => {
-    if (!loading) {
-      setProgressIdx(0);
-      return;
-    }
-    const timer = setInterval(() => {
-      setProgressIdx((prev) =>
-        prev < PROGRESS_MESSAGES.length - 1 ? prev + 1 : prev
-      );
-    }, 4000);
-    return () => clearInterval(timer);
-  }, [loading]);
 
   const validate = (value: string): string | null => {
     if (!value.trim()) return null;
@@ -64,6 +53,9 @@ export default function UrlInput({ onScrape, loading }: Props) {
   };
 
   const isValid = url.trim() && !validate(url);
+
+  // Compute progress bar percentage from the live step
+  const pct = progressStep ? (STEP_PROGRESS[progressStep] ?? 50) : 0;
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -128,24 +120,27 @@ export default function UrlInput({ onScrape, loading }: Props) {
         </button>
       </form>
 
-      {/* Progress indicator */}
+      {/* Live progress indicator powered by SSE */}
       {loading && (
         <div className="mt-6 bg-gray-800/50 border border-gray-700 rounded-xl p-4">
           <div className="flex items-center gap-3 mb-3">
             <Loader2 className="w-5 h-5 text-indigo-400 animate-spin shrink-0" />
             <span className="text-sm font-medium text-indigo-300">
-              {PROGRESS_MESSAGES[progressIdx]}
+              {progressMessage || "Connecting to backend..."}
             </span>
           </div>
           <div className="w-full bg-gray-700 rounded-full h-1.5">
             <div
-              className="bg-indigo-500 h-1.5 rounded-full transition-all duration-1000"
-              style={{ width: `${((progressIdx + 1) / PROGRESS_MESSAGES.length) * 100}%` }}
+              className="bg-indigo-500 h-1.5 rounded-full transition-all duration-700 ease-out"
+              style={{ width: `${pct}%` }}
             />
           </div>
-          <p className="text-xs text-gray-500 mt-2">
-            This usually takes 15-30 seconds. The page needs to fully render before we can extract data.
-          </p>
+          <div className="flex items-center justify-between mt-2">
+            <p className="text-xs text-gray-500">
+              Live progress from server — auto-retries on timeout.
+            </p>
+            <span className="text-xs text-gray-500 tabular-nums">{pct}%</span>
+          </div>
         </div>
       )}
     </div>

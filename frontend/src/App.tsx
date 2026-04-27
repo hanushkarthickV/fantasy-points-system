@@ -5,7 +5,7 @@ import ScorecardReview from "./components/ScorecardReview";
 import PointsReview from "./components/PointsReview";
 import UpdateResults from "./components/UpdateResults";
 import {
-  scrapeScorecard,
+  scrapeWithProgress,
   calculatePoints,
   updateSheet,
   editPlayers,
@@ -30,6 +30,10 @@ export default function App() {
   const [retryLoading, setRetryLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // SSE live progress
+  const [progressStep, setProgressStep] = useState<string>("");
+  const [progressMessage, setProgressMessage] = useState<string>("");
+
   const [metadata, setMetadata] = useState<MatchMetadata | null>(null);
   const [points, setPoints] = useState<MatchPoints | null>(null);
   const [updateResult, setUpdateResult] = useState<SheetUpdateResponse | null>(null);
@@ -37,8 +41,13 @@ export default function App() {
   const handleScrape = async (url: string) => {
     setLoading(true);
     setError(null);
+    setProgressStep("");
+    setProgressMessage("");
     try {
-      const data = await scrapeScorecard(url);
+      const data = await scrapeWithProgress(url, (sseStep, sseMsg) => {
+        setProgressStep(sseStep);
+        setProgressMessage(sseMsg);
+      });
       setMetadata(data);
       setStep("review_scorecard");
     } catch (err: any) {
@@ -52,6 +61,8 @@ export default function App() {
       }
     } finally {
       setLoading(false);
+      setProgressStep("");
+      setProgressMessage("");
     }
   };
 
@@ -213,7 +224,12 @@ export default function App() {
       {/* Main Content */}
       <main className="max-w-5xl mx-auto px-6 py-8">
         {step === "input" && (
-          <UrlInput onScrape={handleScrape} loading={loading} />
+          <UrlInput
+            onScrape={handleScrape}
+            loading={loading}
+            progressStep={progressStep}
+            progressMessage={progressMessage}
+          />
         )}
         {step === "review_scorecard" && metadata && (
           <ScorecardReview

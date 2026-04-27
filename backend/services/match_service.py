@@ -19,7 +19,7 @@ from backend.models.schemas import (
     PlayerEdit,
     SheetUpdateResponse,
 )
-from backend.scraper.scorecard_scraper import scrape_scorecard
+from backend.scraper.scorecard_scraper import scrape_scorecard, ProgressCallback
 from backend.services.sheet_service import SheetService
 
 logger = get_logger(__name__)
@@ -33,9 +33,11 @@ class MatchService:
 
     # ── Step 1: Scrape ─────────────────────────────────────────────────────────
 
-    def scrape_match(self, url: str) -> MatchMetadata:
+    def scrape_match(
+        self, url: str, on_progress: ProgressCallback = None,
+    ) -> MatchMetadata:
         """Scrape a match scorecard and persist metadata JSON."""
-        metadata = scrape_scorecard(url)
+        metadata = scrape_scorecard(url, on_progress=on_progress)
         self._save_match_json(metadata.match_id, "metadata.json", metadata.model_dump())
         logger.info("Scraped and saved metadata for match %s", metadata.match_id)
         return metadata

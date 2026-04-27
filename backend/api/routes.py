@@ -13,7 +13,14 @@ Each endpoint corresponds to one step of the human-in-the-loop workflow:
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+import asyncio
+import json
+import queue
+import re
+import threading
+
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
 from backend.logger import get_logger
@@ -28,6 +35,10 @@ from backend.models.schemas import (
     UpdateSheetRequest,
 )
 from backend.services.match_service import MatchService
+
+_ESPNCRICINFO_PATTERN = re.compile(
+    r"https?://(?:www\.)?espncricinfo\.com/.+/full-scorecard"
+)
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api")
@@ -68,6 +79,84 @@ async def scrape_scorecard(request: ScrapeRequest):
             status_code=500,
             detail=f"Failed to scrape scorecard: {error_msg[:200]}",
         ) from exc
+
+
+# ── Step 1b: Scrape with SSE progress ─────────────────────────────────────────
+
+@router.get("/scrape-stream")
+async def scrape_stream(url: str = Query(..., description="ESPNcricinfo full-scorecard URL")):
+    """
+    Stream real-time progress events while scraping a scorecard.
+
+    Returns ``text/event-stream`` with events:
+      - ``progress`` — {step, message}
+      - ``done``     — full MatchMetadata JSON
+      - ``error``    — {message}
+    """
+    # Validate URL before starting the stream
+    if not _ESPNCRICINFO_PATTERN.match(url):
+        raise HTTPException(
+            status_code=422,
+            detail="URL must be a valid ESPNcricinfo full-scorecard URL",
+        )
+
+    logger.info("[SCRAPE-SSE] Starting stream for URL: %s", url)
+
+    progress_q: queue.Queue = queue.Queue()
+
+    def on_progress(step: str, message: str) -> None:
+        progress_q.put(("progress", step, message))
+
+    def run_scraper() -> None:
+        try:
+            metadata = _match_service.scrape_match(url, on_progress=on_progress)
+            progress_q.put(("done", metadata.model_dump(), None))
+        except Exception as exc:
+            error_msg = str(exc)
+            is_timeout = "timeout" in error_msg.lower() or "timed out" in error_msg.lower()
+            if is_timeout:
+                progress_q.put(("error", "The page took too long to load. Please try again.", None))
+            else:
+                progress_q.put(("error", f"Scraping failed: {error_msg[:200]}", None))
+
+    thread = threading.Thread(target=run_scraper, daemon=True)
+    thread.start()
+
+    async def event_generator():
+        while True:
+            try:
+                item = progress_q.get_nowait()
+            except queue.Empty:
+                # No event yet — send keepalive comment and wait
+                if not thread.is_alive() and progress_q.empty():
+                    break
+                yield ": keepalive\n\n"
+                await asyncio.sleep(0.4)
+                continue
+
+            kind = item[0]
+            if kind == "progress":
+                _, step, message = item
+                payload = json.dumps({"step": step, "message": message})
+                yield f"event: progress\ndata: {payload}\n\n"
+            elif kind == "done":
+                _, data, _ = item
+                yield f"event: done\ndata: {json.dumps(data)}\n\n"
+                break
+            elif kind == "error":
+                _, message, _ = item
+                yield f"event: error\ndata: {json.dumps({'message': message})}\n\n"
+                break
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 # ── Step 2: Calculate Points ───────────────────────────────────────────────────

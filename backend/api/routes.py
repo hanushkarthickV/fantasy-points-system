@@ -122,7 +122,13 @@ async def scrape_stream(url: str = Query(..., description="ESPNcricinfo full-sco
     thread = threading.Thread(target=run_scraper, daemon=True)
     thread.start()
 
+    # Padding to bust reverse-proxy buffers (Render/nginx buffer ~4KB before flushing)
+    _PAD = " " * 2048
+
     async def event_generator():
+        # Force an immediate flush through any proxy buffer
+        yield f": {_PAD}\n: stream-start\n\n"
+
         while True:
             try:
                 item = progress_q.get_nowait()
@@ -130,7 +136,7 @@ async def scrape_stream(url: str = Query(..., description="ESPNcricinfo full-sco
                 # No event yet — send keepalive comment and wait
                 if not thread.is_alive() and progress_q.empty():
                     break
-                yield ": keepalive\n\n"
+                yield f": keepalive{_PAD}\n\n"
                 await asyncio.sleep(0.4)
                 continue
 

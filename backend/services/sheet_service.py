@@ -166,12 +166,14 @@ class SheetService:
         points_col = self._sheet.find_column_index(POINTS_COLUMN)
         spec_col = self._sheet.find_column_index(SPECIALISM_COLUMN)
 
-        # Build sheet row lookup
+        # Build sheet row lookup — keyed by original name AND lowercase for case-insensitive matching
         sheet_lookup: dict[str, tuple[int, dict]] = {}
+        sheet_lookup_lower: dict[str, str] = {}  # lowercase → original sheet name
         for i, rec in enumerate(records):
             pname = str(rec.get(PLAYER_NAME_COLUMN, "")).strip()
             if pname:
                 sheet_lookup[pname] = (i + 2, rec)
+                sheet_lookup_lower[pname.lower()] = pname
 
         # Build player points lookup from match  (strip " (best: ...)" from display name)
         player_points_map: dict[str, int] = {}
@@ -187,8 +189,12 @@ class SheetService:
             scraped_name = display_name.split(" (best:")[0].strip() if " (best:" in display_name else display_name
 
             pts = player_points_map.get(scraped_name, 0)
-            if corrected_name in sheet_lookup:
-                row_idx, rec = sheet_lookup[corrected_name]
+
+            # Case-insensitive lookup: try exact first, then lowercase
+            actual_key = corrected_name if corrected_name in sheet_lookup else sheet_lookup_lower.get(corrected_name.lower())
+
+            if actual_key and actual_key in sheet_lookup:
+                row_idx, rec = sheet_lookup[actual_key]
                 prev_points = _safe_float(rec.get(POINTS_COLUMN, 0))
                 new_points = prev_points + pts
                 specialism = str(rec.get(SPECIALISM_COLUMN, ""))
@@ -196,7 +202,7 @@ class SheetService:
                 batch_updates.append({"row": row_idx, "col": points_col, "value": new_points})
                 updated.append(PlayerUpdateResult(
                     scraped_name=scraped_name,
-                    matched_name=corrected_name,
+                    matched_name=actual_key,
                     match_score=100,
                     previous_points=prev_points,
                     added_points=pts,

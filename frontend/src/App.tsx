@@ -107,11 +107,14 @@ export default function App() {
     setError(null);
     try {
       const retryResult = await retryUnmatched(updateResult.match_id, corrections);
-      // Merge results: add newly updated players, remove them from unmatched
+      // Keys that were submitted for correction
       const correctedKeys = new Set(Object.keys(corrections));
+      // Remove corrected keys from the current unmatched list
       const remainingUnmatched = updateResult.unmatched_players.filter(
         (u) => !correctedKeys.has(u)
       );
+      // retryResult.unmatched_players contains the ORIGINAL display keys
+      // for names that still didn't match — add them back
       setUpdateResult({
         ...updateResult,
         updated_players: [

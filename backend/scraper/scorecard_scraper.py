@@ -7,9 +7,11 @@ Uses BrowserWrapper for page loading and ElementWrapper for HTML parsing.
 from __future__ import annotations
 
 import re
+import time
 from typing import Optional
 
 from backend.logger import get_logger
+from backend.config import SCRAPE_MAX_RETRIES
 from backend.models.schemas import (
     BattingEntry,
     BowlingEntry,
@@ -30,20 +32,42 @@ def scrape_scorecard(url: str) -> MatchMetadata:
     """
     Open the ESPNcricinfo scorecard at *url*, parse it, and return a
     fully-populated ``MatchMetadata`` object.
+
+    Retries up to SCRAPE_MAX_RETRIES times on timeout/page-load failures.
     """
     match_id = _extract_match_id(url)
     logger.info("[SCRAPER] Starting scrape for match_id=%s, url=%s", match_id, url)
 
-    with BrowserWrapper() as browser:
-        browser.open(url)
-        logger.debug("[SCRAPER] Page loaded, waiting for scorecard table...")
-        browser.wait_for_element("table.ci-scorecard-table")
-        html = browser.get_page_source()
-        logger.info("[SCRAPER] Got page source (%d chars)", len(html))
+    last_exc: Exception | None = None
+    for attempt in range(1, SCRAPE_MAX_RETRIES + 1):
+        try:
+            with BrowserWrapper() as browser:
+                browser.open(url)
+                logger.debug("[SCRAPER] Page loaded, waiting for scorecard table...")
+                browser.wait_for_element("table.ci-scorecard-table")
+                html = browser.get_page_source()
+                logger.info("[SCRAPER] Got page source (%d chars) on attempt %d", len(html), attempt)
 
-    result = _parse_scorecard_html(html, match_id, url)
-    logger.info("[SCRAPER] Parse complete: %d innings, teams: %s vs %s", len(result.innings), result.team1, result.team2)
-    return result
+            result = _parse_scorecard_html(html, match_id, url)
+            logger.info("[SCRAPER] Parse complete: %d innings, teams: %s vs %s", len(result.innings), result.team1, result.team2)
+            return result
+        except Exception as exc:
+            last_exc = exc
+            error_msg = str(exc).lower()
+            is_timeout = "timeout" in error_msg or "timed out" in error_msg
+            if is_timeout and attempt < SCRAPE_MAX_RETRIES:
+                wait_secs = attempt * 3
+                logger.warning(
+                    "[SCRAPER] Attempt %d/%d timed out, retrying in %ds...",
+                    attempt, SCRAPE_MAX_RETRIES, wait_secs,
+                )
+                time.sleep(wait_secs)
+                continue
+            # Non-timeout error or last attempt — re-raise
+            raise
+
+    # Should not reach here, but just in case
+    raise last_exc  # type: ignore[misc]
 
 
 def parse_scorecard_from_html(html: str, url: str) -> MatchMetadata:
@@ -372,6 +396,17 @@ def _parse_dismissal(batter_name: str, dismissal_text: str) -> DismissalDetail:
             dismissal_type="not_out",
         )
 
+    # "c & b BowlerName" (caught and bowled) — MUST be checked before general caught
+    cnb_match = re.match(r"c\s*&\s*b\s+(.+)", text, re.IGNORECASE)
+    if cnb_match:
+        bowler = _clean_player_name(cnb_match.group(1))
+        return DismissalDetail(
+            batter_name=batter_name,
+            dismissal_type="caught",
+            bowler_name=bowler,
+            fielder_name=bowler,  # bowler is also the fielder
+        )
+
     # "c FielderName b BowlerName"  or  "c †FielderName b BowlerName"
     caught_match = re.match(
         r"c\s+[†]?(.+?)\s+b\s+(.+)", text, re.IGNORECASE
@@ -384,17 +419,6 @@ def _parse_dismissal(batter_name: str, dismissal_text: str) -> DismissalDetail:
             dismissal_type="caught",
             bowler_name=bowler,
             fielder_name=fielder,
-        )
-
-    # "c & b BowlerName" (caught and bowled)
-    cnb_match = re.match(r"c\s*&\s*b\s+(.+)", text, re.IGNORECASE)
-    if cnb_match:
-        bowler = _clean_player_name(cnb_match.group(1))
-        return DismissalDetail(
-            batter_name=batter_name,
-            dismissal_type="caught",
-            bowler_name=bowler,
-            fielder_name=bowler,  # bowler is also the fielder
         )
 
     # "lbw b BowlerName"

@@ -33,5 +33,6 @@ FUZZY_REVIEW_THRESHOLD = 60
 
 # ── Selenium ───────────────────────────────────────────────────────────────────
 BROWSER_HEADLESS = True
-PAGE_LOAD_TIMEOUT = 30
-ELEMENT_WAIT_TIMEOUT = 15
+PAGE_LOAD_TIMEOUT = 60
+ELEMENT_WAIT_TIMEOUT = 20
+SCRAPE_MAX_RETRIES = 3

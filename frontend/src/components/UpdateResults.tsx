@@ -17,13 +17,15 @@ export default function UpdateResults({ result, onReset, onRetryUnmatched, retry
     setCorrections((prev) => ({ ...prev, [unmatchedEntry]: value }));
   };
 
-  const handleRetry = () => {
+  const handleRetry = async () => {
     // Only send non-empty corrections
     const nonEmpty = Object.fromEntries(
       Object.entries(corrections).filter(([, v]) => v.trim())
     );
     if (Object.keys(nonEmpty).length > 0) {
-      onRetryUnmatched(nonEmpty);
+      await onRetryUnmatched(nonEmpty);
+      // Clear all inputs after retry so the user starts fresh
+      setCorrections({});
     }
   };
 

@@ -204,7 +204,8 @@ class SheetService:
                     specialism=specialism,
                 ))
             else:
-                still_unmatched.append(f"{scraped_name} → '{corrected_name}' not found in sheet")
+                # Preserve the ORIGINAL display key so frontend can track by stable key
+                still_unmatched.append(display_name)
 
         if batch_updates:
             self._sheet.batch_update_cells(batch_updates)

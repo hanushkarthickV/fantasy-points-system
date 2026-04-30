@@ -135,6 +135,28 @@ class SheetWrapper:
             self._worksheet.update_cells(cells)
             logger.info("Batch-updated %d cells", len(cells))
 
+    # ── Sorting ──────────────────────────────────────────────────────────────
+
+    def sort_worksheet_by_column(
+        self, worksheet_name: str, column_name: str, ascending: bool = False
+    ) -> None:
+        """
+        Sort *worksheet_name* by *column_name* (server-side).
+
+        Preserves formulas and lookups in other columns because the
+        Google Sheets API performs the sort on the server.
+        """
+        self._ensure_spreadsheet()
+        ws = self._spreadsheet.worksheet(worksheet_name)
+        header_row = ws.row_values(1)
+        col_idx = header_row.index(column_name) + 1  # 1-indexed
+        order = "asc" if ascending else "des"
+        ws.sort((col_idx, order), range=f"A2:{gspread.utils.rowcol_to_a1(ws.row_count, ws.col_count)}")
+        logger.info(
+            "[SHEET_WRAP] Sorted '%s' by '%s' (%s)",
+            worksheet_name, column_name, order,
+        )
+
     # ── Search ─────────────────────────────────────────────────────────────────
 
     def find_row_by_value(self, column_name: str, value: str) -> Optional[int]:

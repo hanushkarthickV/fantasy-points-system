@@ -19,6 +19,8 @@ from backend.config import (
     POINTS_COLUMN,
     SPECIALISM_COLUMN,
     SPREADSHEET_ID,
+    SUMMARY_SORT_COLUMN,
+    SUMMARY_WORKSHEET_NAME,
     WORKSHEET_NAME,
 )
 from backend.models.schemas import (
@@ -143,6 +145,7 @@ class SheetService:
         if batch_updates:
             self._sheet.batch_update_cells(batch_updates)
             logger.info("Updated %d players in sheet", len(batch_updates))
+            self._sort_summary_table()
 
         return SheetUpdateResponse(
             match_id=match_points.match_id,
@@ -216,12 +219,25 @@ class SheetService:
         if batch_updates:
             self._sheet.batch_update_cells(batch_updates)
             logger.info("Retry: updated %d players in sheet", len(batch_updates))
+            self._sort_summary_table()
 
         return SheetUpdateResponse(
             match_id=match_points.match_id,
             updated_players=updated,
             unmatched_players=still_unmatched,
         )
+
+    # ── Summary Table Sorting ─────────────────────────────────────────────────
+
+    def _sort_summary_table(self) -> None:
+        """Sort the Summary-PointsTable sheet by Dream11 Points descending."""
+        try:
+            self._sheet.sort_worksheet_by_column(
+                SUMMARY_WORKSHEET_NAME, SUMMARY_SORT_COLUMN, ascending=False
+            )
+            logger.info("[SHEET_SVC] Sorted summary table by %s", SUMMARY_SORT_COLUMN)
+        except Exception as exc:
+            logger.warning("[SHEET_SVC] Failed to sort summary table: %s", exc)
 
     # ── Fuzzy Matching ─────────────────────────────────────────────────────────
 

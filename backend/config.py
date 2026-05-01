@@ -21,7 +21,7 @@ GOOGLE_CREDENTIALS_PATH = next(
     (p for p in _CRED_CANDIDATES if p.exists()),
     _CRED_CANDIDATES[0],  # fallback to local path (will error clearly at runtime)
 )
-SPREADSHEET_ID = "1VP_iSR_LoJRyyGWENSuc8gKz1YbphD0htKd-w66mvFI"
+SPREADSHEET_ID = "1DnFIQbXyFTrS-Ha8YdpF6XwshLCVOlXXKng934WAbK4"
 WORKSHEET_NAME = "IPL_2026_Auction_List"
 SUMMARY_WORKSHEET_NAME = "Summary-PointsTable"
 SUMMARY_SORT_COLUMN = "Dream11 Points"

@@ -15,14 +15,12 @@ from datetime import datetime
 from sqlalchemy import (
     Column,
     DateTime,
-    Enum,
     Integer,
     JSON,
     String,
     Text,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 from backend.db.base import Base
 
@@ -55,9 +53,9 @@ class Match(Base):
     match_date = Column(DateTime, nullable=True)
     scorecard_url = Column(Text, nullable=True)
     status = Column(
-        Enum(MatchStatus, name="match_status"),
+        String(32),
         nullable=False,
-        default=MatchStatus.SCHEDULED,
+        default=MatchStatus.SCHEDULED.value,
         server_default="scheduled",
     )
     result_text = Column(Text, nullable=True)

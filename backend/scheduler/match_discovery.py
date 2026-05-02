@@ -9,11 +9,15 @@ The schedule page is static HTML, so we use requests + BeautifulSoup
 from __future__ import annotations
 
 import re
+import urllib3
 from datetime import datetime
 from typing import Optional
 
 import requests
 from bs4 import BeautifulSoup
+
+# Suppress InsecureRequestWarning for corporate proxy environments
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from backend.db.base import SessionLocal
 from backend.db.models import Match, MatchStatus
@@ -32,106 +36,57 @@ _MATCH_ID_RE = re.compile(r"-(\d{7})/full-scorecard")
 _MATCH_NUM_RE = re.compile(r"(\d+)(?:st|nd|rd|th)\s+Match", re.IGNORECASE)
 
 
+_IPL_LINK_RE = re.compile(
+    r'href="(/series/ipl-2026-1510719/[^"]*?-(\d{7})/full-scorecard)"'
+)
+# Extract match slug parts: "team1-vs-team2-Nth-match-ID"
+_SLUG_RE = re.compile(
+    r"/series/ipl-2026-1510719/(.+)-(\d{7})/full-scorecard"
+)
+
+
 def _parse_schedule_page(html: str) -> list[dict]:
     """
     Parse the ESPN schedule page HTML and return a list of match dicts.
-    
-    Each dict has:
-      - espn_match_id: str
-      - match_number: int | None
-      - title: str
-      - team1: str | None
-      - team2: str | None
-      - venue: str | None
-      - match_date: datetime | None
-      - scorecard_url: str | None
-      - result_text: str | None
-      - is_completed: bool
+
+    Uses regex to find all IPL 2026 scorecard links and extracts info from
+    the URL slug (e.g. 'rajasthan-royals-vs-delhi-capitals-43rd-match').
     """
-    soup = BeautifulSoup(html, "html.parser")
     matches: list[dict] = []
+    seen_ids: set[str] = set()
 
-    # Look for match cards — ESPN uses div containers with match info
-    # Each match card has a link to the scorecard and match details
-    match_cards = soup.select("div[class*='MatchCardContainer']")
-    
-    if not match_cards:
-        # Alternative selector: look for schedule list items
-        match_cards = soup.select("div.ds-p-0 a[href*='/full-scorecard']")
-        if not match_cards:
-            # Try another pattern: all links to full-scorecard
-            scorecard_links = soup.find_all("a", href=re.compile(r"/full-scorecard"))
-            for link in scorecard_links:
-                href = link.get("href", "")
-                mid_match = _MATCH_ID_RE.search(href)
-                if not mid_match:
-                    continue
-                espn_id = mid_match.group(1)
-                
-                # Walk up to find the card container
-                card = link.find_parent("div", class_=re.compile(r"ds-"))
-                title_text = ""
-                if card:
-                    # Try to find match title
-                    title_el = card.find("p", class_=re.compile(r"ds-text-tight"))
-                    title_text = title_el.get_text(strip=True) if title_el else ""
+    for href_match in _IPL_LINK_RE.finditer(html):
+        href = href_match.group(1)
+        espn_id = href_match.group(2)
 
-                match_num = None
-                num_match = _MATCH_NUM_RE.search(title_text)
-                if num_match:
-                    match_num = int(num_match.group(1))
-
-                full_url = f"https://www.espncricinfo.com{href}" if href.startswith("/") else href
-
-                matches.append({
-                    "espn_match_id": espn_id,
-                    "match_number": match_num,
-                    "title": title_text or f"Match {espn_id}",
-                    "team1": None,
-                    "team2": None,
-                    "venue": None,
-                    "match_date": None,
-                    "scorecard_url": full_url,
-                    "result_text": None,
-                    "is_completed": True,  # has scorecard → completed
-                })
-            
-            # Also look for scheduled matches (no scorecard link)
-            # These won't have /full-scorecard URLs yet
-            logger.info("[DISCOVERY] Found %d matches via scorecard links", len(matches))
-            return matches
-
-    # Process structured match cards
-    for card in match_cards:
-        scorecard_link = card.find("a", href=re.compile(r"/full-scorecard"))
-        if not scorecard_link:
+        if espn_id in seen_ids:
             continue
-        href = scorecard_link.get("href", "")
-        mid_match = _MATCH_ID_RE.search(href)
-        if not mid_match:
-            continue
-        espn_id = mid_match.group(1)
-        full_url = f"https://www.espncricinfo.com{href}" if href.startswith("/") else href
+        seen_ids.add(espn_id)
 
-        # Extract details from card
+        full_url = f"https://www.espncricinfo.com{href}"
+
+        # Parse slug for team names and match number
+        slug_match = _SLUG_RE.search(href)
         title_text = ""
-        title_el = card.find(string=re.compile(r"\d+(?:st|nd|rd|th)\s+Match"))
-        if title_el:
-            title_text = title_el.strip()
-
+        team1 = None
+        team2 = None
         match_num = None
-        num_match = _MATCH_NUM_RE.search(title_text)
-        if num_match:
-            match_num = int(num_match.group(1))
 
-        # Teams
-        team_els = card.select("p[class*='TeamName']")
-        team1 = team_els[0].get_text(strip=True) if len(team_els) > 0 else None
-        team2 = team_els[1].get_text(strip=True) if len(team_els) > 1 else None
+        if slug_match:
+            slug = slug_match.group(1)  # e.g. "rajasthan-royals-vs-delhi-capitals-43rd-match"
+            # Extract match number
+            num_match = _MATCH_NUM_RE.search(slug.replace("-", " "))
+            if num_match:
+                match_num = int(num_match.group(1))
 
-        # Result
-        result_el = card.find(string=re.compile(r"(won|tied|no result)", re.IGNORECASE))
-        result_text = result_el.strip() if result_el else None
+            # Extract teams from slug (everything before "Nth-match")
+            teams_part = re.sub(r"-\d+(?:st|nd|rd|th)-match$", "", slug)
+            if "-vs-" in teams_part:
+                parts = teams_part.split("-vs-")
+                team1 = parts[0].replace("-", " ").title()
+                team2 = parts[1].replace("-", " ").title()
+
+            title_text = slug.replace("-", " ").title()
 
         matches.append({
             "espn_match_id": espn_id,
@@ -142,11 +97,11 @@ def _parse_schedule_page(html: str) -> list[dict]:
             "venue": None,
             "match_date": None,
             "scorecard_url": full_url,
-            "result_text": result_text,
-            "is_completed": result_text is not None,
+            "result_text": None,
+            "is_completed": True,  # has scorecard link → completed
         })
 
-    logger.info("[DISCOVERY] Parsed %d match cards from schedule page", len(matches))
+    logger.info("[DISCOVERY] Parsed %d IPL 2026 matches from schedule page", len(matches))
     return matches
 
 
@@ -159,7 +114,7 @@ def discover_matches() -> int:
     logger.info("[DISCOVERY] Starting match discovery from %s", SCHEDULE_URL)
     
     try:
-        resp = requests.get(SCHEDULE_URL, timeout=30, headers={
+        resp = requests.get(SCHEDULE_URL, timeout=30, verify=False, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         })
         resp.raise_for_status()

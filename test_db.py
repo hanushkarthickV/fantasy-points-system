@@ -1,13 +1,37 @@
-"""Verify matches in DB."""
-import requests
+"""Migrate DB: add sheet_update_json column + extraction_queue table."""
+from dotenv import load_dotenv
+load_dotenv()
 
-r = requests.get("http://127.0.0.1:8080/api/v2/matches?limit=50")
-data = r.json()
-print(f"Total matches: {data['total']}")
-print()
-for m in data["matches"]:
-    num = m["match_number"] or "?"
-    t1 = m["team1"] or "?"
-    t2 = m["team2"] or "?"
-    status = m["status"]
-    print(f"  #{num:>3}: {t1} vs {t2} [{status}]")
+from sqlalchemy import text, inspect
+from backend.db.base import engine, Base
+from backend.db import models  # registers all models
+
+insp = inspect(engine)
+existing_tables = insp.get_table_names()
+print(f"Existing tables: {existing_tables}")
+
+# Add sheet_update_json column if missing
+with engine.connect() as conn:
+    cols = [c["name"] for c in insp.get_columns("matches")]
+    if "sheet_update_json" not in cols:
+        conn.execute(text("ALTER TABLE matches ADD COLUMN sheet_update_json JSONB"))
+        conn.commit()
+        print("Added sheet_update_json column to matches")
+    else:
+        print("sheet_update_json column already exists")
+
+# Create extraction_queue table if missing
+if "extraction_queue" not in existing_tables:
+    models.ExtractionQueue.__table__.create(bind=engine)
+    print("Created extraction_queue table")
+else:
+    print("extraction_queue table already exists")
+
+# Update any 'extracted' status matches to 'points_calculated' (old status removed)
+with engine.connect() as conn:
+    result = conn.execute(text("UPDATE matches SET status = 'completed' WHERE status = 'extracted'"))
+    conn.commit()
+    print(f"Migrated {result.rowcount} 'extracted' rows to 'completed'")
+
+print("Migration complete!")
+print(f"Tables: {inspect(engine).get_table_names()}")

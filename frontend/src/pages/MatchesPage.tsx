@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   RefreshCw,
   Play,
@@ -11,26 +11,28 @@ import {
   Loader2,
   Eye,
   ArrowLeft,
+  History,
+  Info,
 } from "lucide-react";
 import {
   fetchMatches,
-  extractMatchStream,
-  calculatePointsV2,
+  queueExtraction,
   updateSheetV2,
   triggerDiscovery,
   fetchMatchPoints,
+  fetchSheetResult,
   editPlayersV2,
   type MatchItem,
 } from "../services/api_v2";
 import PointsReview from "../components/PointsReview";
-import type { MatchPoints } from "../types";
+import type { MatchPoints, SheetUpdateResponse } from "../types";
 
 // ── Status badge config ──────────────────────────────────────────────────────
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
   scheduled: { label: "Scheduled", color: "bg-gray-700 text-gray-300", icon: Clock },
   completed: { label: "Completed", color: "bg-blue-500/20 text-blue-300", icon: CheckCircle2 },
+  queued: { label: "Queued", color: "bg-yellow-500/20 text-yellow-300", icon: Clock },
   extracting: { label: "Extracting...", color: "bg-yellow-500/20 text-yellow-300", icon: Loader2 },
-  extracted: { label: "Extracted", color: "bg-emerald-500/20 text-emerald-300", icon: CheckCircle2 },
   points_calculated: { label: "Points Ready", color: "bg-purple-500/20 text-purple-300", icon: Calculator },
   sheet_updated: { label: "Sheet Updated", color: "bg-green-500/20 text-green-300", icon: FileSpreadsheet },
   extraction_failed: { label: "Failed", color: "bg-red-500/20 text-red-300", icon: AlertTriangle },
@@ -46,17 +48,21 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
   const [matches, setMatches] = useState<MatchItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
-  const [extractingId, setExtractingId] = useState<number | null>(null);
-  const [progressMsg, setProgressMsg] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [actionLoading, setActionLoading] = useState<number | null>(null);
+
   // Review modal state
   const [reviewMatchId, setReviewMatchId] = useState<number | null>(null);
   const [reviewPoints, setReviewPoints] = useState<MatchPoints | null>(null);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewMatch, setReviewMatch] = useState<MatchItem | null>(null);
+  const [reviewSheetResult, setReviewSheetResult] = useState<SheetUpdateResponse | null>(null);
+  const [sheetUpdateLoading, setSheetUpdateLoading] = useState(false);
+  const [reviewMode, setReviewMode] = useState<"review" | "history">("review");
 
-  const loadMatches = async () => {
+  // Auto-poll ref
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const loadMatches = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetchMatches();
@@ -66,21 +72,42 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadMatches();
-  }, []);
+  }, [loadMatches]);
+
+  // Auto-poll: if any match is queued or extracting, refresh every 5s
+  useEffect(() => {
+    const hasActive = matches.some((m) => m.status === "queued" || m.status === "extracting");
+    if (hasActive && !pollRef.current) {
+      pollRef.current = setInterval(async () => {
+        try {
+          const res = await fetchMatches();
+          setMatches(res.matches);
+        } catch { /* ignore */ }
+      }, 5000);
+    } else if (!hasActive && pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [matches]);
+
+  // ── Discovery ──────────────────────────────────────────────────────────────
 
   const handleDiscovery = async () => {
     setDiscoveryLoading(true);
     setError(null);
     try {
-      const res = await triggerDiscovery();
+      await triggerDiscovery();
       await loadMatches();
-      if (res.new_matches > 0) {
-        setError(null);
-      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -88,61 +115,42 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
     }
   };
 
-  const handleExtract = (matchId: number) => {
-    setExtractingId(matchId);
-    setProgressMsg("Starting extraction...");
-    setError(null);
+  // ── Queue Extraction ───────────────────────────────────────────────────────
 
-    // Optimistically update status
-    setMatches((prev) =>
-      prev.map((m) => (m.id === matchId ? { ...m, status: "extracting" } : m))
-    );
-
-    extractMatchStream(
-      matchId,
-      (_step, message) => setProgressMsg(message),
-      (_data) => {
-        setExtractingId(null);
-        setProgressMsg("");
-        setMatches((prev) =>
-          prev.map((m) => (m.id === matchId ? { ...m, status: "extracted" } : m))
-        );
-      },
-      (message) => {
-        setExtractingId(null);
-        setProgressMsg("");
-        setError(message);
-        setMatches((prev) =>
-          prev.map((m) => (m.id === matchId ? { ...m, status: "extraction_failed" } : m))
-        );
-      }
-    );
-  };
-
-  const handleCalculate = async (matchId: number) => {
-    setActionLoading(matchId);
+  const handleQueueExtract = async (matchId: number) => {
     setError(null);
     try {
-      await calculatePointsV2(matchId);
+      await queueExtraction(matchId);
+      // Optimistically update
       setMatches((prev) =>
-        prev.map((m) => (m.id === matchId ? { ...m, status: "points_calculated" } : m))
+        prev.map((m) => (m.id === matchId ? { ...m, status: "queued" } : m))
       );
     } catch (err: any) {
       setError(err.message);
-    } finally {
-      setActionLoading(null);
     }
   };
 
-  const handleOpenReview = async (matchId: number) => {
+  // ── Review Points (open) ───────────────────────────────────────────────────
+
+  const handleOpenReview = async (matchId: number, mode: "review" | "history" = "review") => {
     setReviewLoading(true);
     setError(null);
+    setReviewSheetResult(null);
+    setReviewMode(mode);
     const match = matches.find((m) => m.id === matchId) || null;
     setReviewMatch(match);
     try {
       const pts = await fetchMatchPoints(matchId);
       setReviewPoints(pts as MatchPoints);
       setReviewMatchId(matchId);
+
+      // If viewing history and sheet was already updated, fetch the result
+      if (mode === "history" && match?.status === "sheet_updated") {
+        try {
+          const sr = await fetchSheetResult(matchId);
+          setReviewSheetResult(sr as SheetUpdateResponse);
+        } catch { /* no sheet result yet */ }
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -154,7 +162,11 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
     setReviewMatchId(null);
     setReviewPoints(null);
     setReviewMatch(null);
+    setReviewSheetResult(null);
+    loadMatches(); // Refresh list on close
   };
+
+  // ── Edit Players ───────────────────────────────────────────────────────────
 
   const handleReviewEditPlayers = async (
     edits: { original_name: string; new_name?: string; new_total_points?: number }[]
@@ -163,102 +175,135 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
     try {
       const updated = await editPlayersV2(reviewMatchId, edits);
       setReviewPoints(updated as MatchPoints);
+      // Clear previous sheet results since data changed
+      setReviewSheetResult(null);
     } catch (err: any) {
       setError(err.message);
     }
   };
+
+  // ── Update Sheet (stays on review screen!) ─────────────────────────────────
 
   const handleReviewApprove = async () => {
     if (!reviewMatchId) return;
-    setActionLoading(reviewMatchId);
+    setSheetUpdateLoading(true);
     setError(null);
     try {
-      await updateSheetV2(reviewMatchId);
+      const result = await updateSheetV2(reviewMatchId);
+      setReviewSheetResult(result as SheetUpdateResponse);
+      // Update match status in local list
       setMatches((prev) =>
         prev.map((m) => (m.id === reviewMatchId ? { ...m, status: "sheet_updated" } : m))
       );
-      handleCloseReview();
     } catch (err: any) {
       setError(err.message);
     } finally {
-      setActionLoading(null);
+      setSheetUpdateLoading(false);
     }
   };
 
-  const handleUpdateSheet = async (matchId: number) => {
-    setActionLoading(matchId);
-    setError(null);
-    try {
-      await updateSheetV2(matchId);
-      setMatches((prev) =>
-        prev.map((m) => (m.id === matchId ? { ...m, status: "sheet_updated" } : m))
-      );
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setActionLoading(null);
-    }
-  };
+  // ── Row Actions ────────────────────────────────────────────────────────────
 
   const getActions = (match: MatchItem) => {
     const actions: JSX.Element[] = [];
-    const isThisLoading = actionLoading === match.id;
 
-    switch (match.status) {
-      case "completed":
-      case "extraction_failed":
-        actions.push(
-          <button
-            key="extract"
-            onClick={() => handleExtract(match.id)}
-            disabled={extractingId !== null}
-            className="px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 disabled:bg-indigo-500/50 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors"
-          >
-            <Play className="w-3 h-3" /> Extract
-          </button>
-        );
-        break;
-      case "extracted":
-        actions.push(
-          <button
-            key="calculate"
-            onClick={() => handleCalculate(match.id)}
-            disabled={isThisLoading}
-            className="px-3 py-1.5 bg-purple-500 hover:bg-purple-600 disabled:bg-purple-500/50 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors"
-          >
-            {isThisLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Calculator className="w-3 h-3" />}
-            Calculate
-          </button>
-        );
-        break;
-      case "points_calculated":
-        actions.push(
-          <button
-            key="review"
-            onClick={() => handleOpenReview(match.id)}
-            disabled={reviewLoading}
-            className="px-3 py-1.5 bg-purple-500 hover:bg-purple-600 disabled:bg-purple-500/50 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors"
-          >
-            {reviewLoading && reviewMatch?.id === match.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" />}
-            Review Points
-          </button>
-        );
-        break;
-      case "manually_extracted":
-        actions.push(
-          <button
-            key="modal-extract"
-            onClick={() => handleExtract(match.id)}
-            disabled={extractingId !== null}
-            className="px-3 py-1.5 bg-gray-600 hover:bg-gray-500 disabled:bg-gray-600/50 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors"
-          >
-            <Play className="w-3 h-3" /> Re-extract
-          </button>
-        );
-        break;
+    // Scheduled matches — disabled with tooltip
+    if (match.status === "scheduled") {
+      actions.push(
+        <span
+          key="disabled"
+          className="px-3 py-1.5 bg-gray-700/50 text-gray-500 text-xs font-medium rounded-lg flex items-center gap-1.5 cursor-not-allowed"
+          title="Extraction possible only after the completion of the match"
+        >
+          <Info className="w-3 h-3" /> Awaiting result
+        </span>
+      );
+      return actions;
     }
+
+    // Extract button for completed / failed
+    if (match.status === "completed" || match.status === "extraction_failed") {
+      actions.push(
+        <button
+          key="extract"
+          onClick={() => handleQueueExtract(match.id)}
+          className="px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors"
+        >
+          <Play className="w-3 h-3" /> Extract
+        </button>
+      );
+    }
+
+    // Queued — show waiting state
+    if (match.status === "queued") {
+      actions.push(
+        <span
+          key="queued"
+          className="px-3 py-1.5 bg-yellow-500/10 text-yellow-300 text-xs font-medium rounded-lg flex items-center gap-1.5"
+        >
+          <Clock className="w-3 h-3" /> In Queue
+        </span>
+      );
+    }
+
+    // Extracting — show spinner
+    if (match.status === "extracting") {
+      actions.push(
+        <span
+          key="extracting"
+          className="px-3 py-1.5 bg-yellow-500/10 text-yellow-300 text-xs font-medium rounded-lg flex items-center gap-1.5"
+        >
+          <Loader2 className="w-3 h-3 animate-spin" /> Extracting...
+        </span>
+      );
+    }
+
+    // Points Ready — Review button
+    if (match.status === "points_calculated") {
+      actions.push(
+        <button
+          key="review"
+          onClick={() => handleOpenReview(match.id, "review")}
+          disabled={reviewLoading}
+          className="px-3 py-1.5 bg-purple-500 hover:bg-purple-600 disabled:bg-purple-500/50 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors"
+        >
+          {reviewLoading && reviewMatch?.id === match.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" />}
+          Review Points
+        </button>
+      );
+    }
+
+    // Sheet Updated or Points Calculated — History button
+    if (match.status === "sheet_updated" || match.status === "points_calculated") {
+      actions.push(
+        <button
+          key="history"
+          onClick={() => handleOpenReview(match.id, "history")}
+          disabled={reviewLoading}
+          className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700/50 text-gray-300 text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors"
+        >
+          <History className="w-3 h-3" /> History
+        </button>
+      );
+    }
+
+    // Manually extracted — re-extract
+    if (match.status === "manually_extracted") {
+      actions.push(
+        <button
+          key="reextract"
+          onClick={() => handleQueueExtract(match.id)}
+          className="px-3 py-1.5 bg-gray-600 hover:bg-gray-500 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors"
+        >
+          <Play className="w-3 h-3" /> Re-extract
+        </button>
+      );
+    }
+
     return actions;
   };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen bg-gray-950">
@@ -314,14 +359,6 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
           <span className="text-sm text-gray-500">{matches.length} matches</span>
         </div>
 
-        {/* Extraction progress banner */}
-        {extractingId && progressMsg && (
-          <div className="mb-4 bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-3 flex items-center gap-3">
-            <Loader2 className="w-4 h-4 text-yellow-400 animate-spin" />
-            <span className="text-sm text-yellow-200">{progressMsg}</span>
-          </div>
-        )}
-
         {/* Error */}
         {error && (
           <div className="mb-4 bg-red-500/10 border border-red-500/30 rounded-xl p-3 flex items-center justify-between">
@@ -347,10 +384,13 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
             {matches.map((match) => {
               const cfg = STATUS_CONFIG[match.status] || STATUS_CONFIG.scheduled;
               const Icon = cfg.icon;
+              const isScheduled = match.status === "scheduled";
               return (
                 <div
                   key={match.id}
-                  className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex items-center justify-between gap-4 hover:border-gray-700 transition-colors"
+                  className={`bg-gray-900 border border-gray-800 rounded-xl p-4 flex items-center justify-between gap-4 transition-colors ${
+                    isScheduled ? "opacity-60" : "hover:border-gray-700"
+                  }`}
                 >
                   <div className="flex items-center gap-4 min-w-0 flex-1">
                     {/* Match number */}
@@ -390,7 +430,7 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
         )}
       </main>
 
-      {/* ── Review Points Modal (full-screen overlay) ────────────────────── */}
+      {/* ── Review Points Full-screen Overlay ────────────────────────────── */}
       {reviewMatchId && reviewPoints && (
         <div className="fixed inset-0 z-[100] bg-gray-950 overflow-y-auto">
           {/* Modal header */}
@@ -405,25 +445,104 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
               </button>
               <div className="flex-1 min-w-0">
                 <h1 className="text-lg font-bold text-white truncate">
-                  Review Points — {reviewMatch?.team1 && reviewMatch?.team2
+                  {reviewMode === "history" ? "Match History" : "Review Points"} — {reviewMatch?.team1 && reviewMatch?.team2
                     ? `${reviewMatch.team1} vs ${reviewMatch.team2}`
                     : `Match #${reviewMatch?.match_number || reviewMatchId}`}
                 </h1>
                 <p className="text-xs text-gray-500">
-                  Edit player names or points, then approve to update the spreadsheet
+                  {reviewMode === "history"
+                    ? "View calculated points and sheet update results"
+                    : "Edit player names or points, then approve to update the spreadsheet"}
                 </p>
               </div>
             </div>
           </header>
 
-          {/* PointsReview component (reused from V1) */}
-          <main className="max-w-5xl mx-auto px-6 py-8">
+          <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
+            {/* PointsReview component */}
             <PointsReview
               points={reviewPoints}
               onApprove={handleReviewApprove}
               onEditPlayers={handleReviewEditPlayers}
-              loading={actionLoading === reviewMatchId}
+              loading={sheetUpdateLoading}
             />
+
+            {/* Sheet Update Results (shown INLINE after update) */}
+            {reviewSheetResult && (
+              <div className="space-y-4">
+                <div className="bg-green-500/10 border border-green-500/30 rounded-xl p-4">
+                  <h3 className="text-sm font-semibold text-green-300 mb-2 flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4" />
+                    Sheet Updated Successfully
+                  </h3>
+                  <p className="text-xs text-green-200/70">
+                    {reviewSheetResult.updated_players.length} player(s) matched &middot;{" "}
+                    {reviewSheetResult.unmatched_players.length} unmatched
+                  </p>
+                </div>
+
+                {/* Matched Players Table */}
+                {reviewSheetResult.updated_players.length > 0 && (
+                  <div className="bg-gray-800/50 border border-gray-700 rounded-xl overflow-hidden">
+                    <div className="px-4 py-3 border-b border-gray-700">
+                      <h4 className="text-sm font-semibold text-white">
+                        Matched Players ({reviewSheetResult.updated_players.length})
+                      </h4>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-gray-400 text-xs uppercase border-b border-gray-700/50">
+                            <th className="text-left px-4 py-2">Scraped Name</th>
+                            <th className="text-left px-4 py-2">Sheet Name</th>
+                            <th className="text-center px-3 py-2">Score</th>
+                            <th className="text-center px-3 py-2">Prev</th>
+                            <th className="text-center px-3 py-2">Added</th>
+                            <th className="text-center px-3 py-2">New</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {reviewSheetResult.updated_players.map((p, i) => (
+                            <tr key={i} className="border-b border-gray-700/30 hover:bg-gray-700/20">
+                              <td className="px-4 py-2 text-gray-300">{p.scraped_name}</td>
+                              <td className="px-4 py-2 font-medium text-white">{p.matched_name}</td>
+                              <td className="text-center px-3 py-2 text-gray-400">{p.match_score}</td>
+                              <td className="text-center px-3 py-2 text-gray-400">{p.previous_points}</td>
+                              <td className="text-center px-3 py-2 text-emerald-400">+{p.added_points}</td>
+                              <td className="text-center px-3 py-2 font-semibold text-white">{p.new_points}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Unmatched Players */}
+                {reviewSheetResult.unmatched_players.length > 0 && (
+                  <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4">
+                    <h4 className="text-sm font-semibold text-red-300 mb-2 flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4" />
+                      Unmatched Players ({reviewSheetResult.unmatched_players.length})
+                    </h4>
+                    <p className="text-xs text-red-200/70 mb-3">
+                      These players were not found in the Google Sheet. Go back to the points list above,
+                      edit their names to match the sheet, save edits, and update the sheet again.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {reviewSheetResult.unmatched_players.map((name, i) => (
+                        <span
+                          key={i}
+                          className="px-3 py-1 rounded-lg bg-red-500/20 text-red-300 text-xs font-medium"
+                        >
+                          {name}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </main>
         </div>
       )}

@@ -28,14 +28,14 @@ from backend.db.base import Base
 # ── Enums ─────────────────────────────────────────────────────────────────────
 
 class MatchStatus(str, enum.Enum):
-    SCHEDULED = "scheduled"
-    COMPLETED = "completed"
-    EXTRACTING = "extracting"
-    EXTRACTED = "extracted"
-    POINTS_CALCULATED = "points_calculated"
-    SHEET_UPDATED = "sheet_updated"
+    SCHEDULED = "scheduled"            # match found but not yet played
+    COMPLETED = "completed"            # match played, ready for extraction
+    QUEUED = "queued"                  # extraction queued
+    EXTRACTING = "extracting"          # extraction in progress
+    POINTS_CALCULATED = "points_calculated"  # extracted + points ready
+    SHEET_UPDATED = "sheet_updated"    # pushed to Google Sheets
     EXTRACTION_FAILED = "extraction_failed"
-    MANUALLY_EXTRACTED = "manually_extracted"
+    MANUALLY_EXTRACTED = "manually_extracted"  # matches 1-42
 
 
 # ── Match ─────────────────────────────────────────────────────────────────────
@@ -63,6 +63,8 @@ class Match(Base):
     metadata_json = Column(JSON, nullable=True)
     # JSON blob of calculated points (MatchPoints dict)
     points_json = Column(JSON, nullable=True)
+    # JSON blob of last sheet update result (SheetUpdateResponse dict)
+    sheet_update_json = Column(JSON, nullable=True)
     # Timestamps
     discovered_at = Column(DateTime, server_default=func.now(), nullable=False)
     extracted_at = Column(DateTime, nullable=True)
@@ -86,6 +88,30 @@ class Extraction(Base):
 
     def __repr__(self) -> str:
         return f"<Extraction match={self.espn_match_id} status={self.status}>"
+
+
+# ── Extraction Queue (async job queue) ───────────────────────────────
+
+class QueueStatus(str, enum.Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    DONE = "done"
+    FAILED = "failed"
+
+
+class ExtractionQueue(Base):
+    __tablename__ = "extraction_queue"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    match_id = Column(Integer, nullable=False, index=True)
+    status = Column(String(32), nullable=False, default=QueueStatus.PENDING.value, server_default="pending")
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<ExtractionQueue match_id={self.match_id} status={self.status}>"
 
 
 # ── User ──────────────────────────────────────────────────────────────────────

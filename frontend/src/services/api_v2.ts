@@ -1,5 +1,5 @@
 /**
- * V2 API client — match listing, extraction, auth.
+ * V2 API client — match listing, queued extraction, points review, auth.
  */
 
 const BASE = import.meta.env.VITE_API_BASE || "";
@@ -78,45 +78,21 @@ export async function fetchMatches(
   return handleResponse(res);
 }
 
-// ── Extraction (SSE) ─────────────────────────────────────────────────────────
+// ── Queue-based Extraction ──────────────────────────────────────────────────
 
-export function extractMatchStream(
-  matchId: number,
-  onProgress: (step: string, message: string) => void,
-  onDone: (data: any) => void,
-  onError: (message: string) => void
-): () => void {
-  const url = `${BASE}/api/v2/matches/${matchId}/extract-stream`;
-  const es = new EventSource(url);
-
-  es.addEventListener("progress", (e) => {
-    const d = JSON.parse(e.data);
-    onProgress(d.step, d.message);
+export async function queueExtraction(matchId: number) {
+  const res = await fetch(`${BASE}/api/v2/matches/${matchId}/queue-extract`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
   });
+  return handleResponse(res);
+}
 
-  es.addEventListener("done", (e) => {
-    const d = JSON.parse(e.data);
-    onDone(d);
-    es.close();
+export async function fetchQueueStatus() {
+  const res = await fetch(`${BASE}/api/v2/queue/status`, {
+    headers: authHeaders(),
   });
-
-  es.addEventListener("error", (e: any) => {
-    if (e.data) {
-      const d = JSON.parse(e.data);
-      onError(d.message);
-    } else {
-      onError("Connection lost");
-    }
-    es.close();
-  });
-
-  es.onerror = () => {
-    onError("Connection lost");
-    es.close();
-  };
-
-  // Return cleanup function
-  return () => es.close();
+  return handleResponse(res);
 }
 
 // ── Points & Sheet ───────────────────────────────────────────────────────────
@@ -128,18 +104,17 @@ export async function fetchMatchPoints(matchId: number) {
   return handleResponse(res);
 }
 
-export async function calculatePointsV2(matchId: number) {
-  const res = await fetch(`${BASE}/api/v2/matches/${matchId}/calculate`, {
+export async function updateSheetV2(matchId: number) {
+  const res = await fetch(`${BASE}/api/v2/matches/${matchId}/update-sheet`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json" },
   });
   return handleResponse(res);
 }
 
-export async function updateSheetV2(matchId: number) {
-  const res = await fetch(`${BASE}/api/v2/matches/${matchId}/update-sheet`, {
-    method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
+export async function fetchSheetResult(matchId: number) {
+  const res = await fetch(`${BASE}/api/v2/matches/${matchId}/sheet-result`, {
+    headers: authHeaders(),
   });
   return handleResponse(res);
 }
@@ -156,18 +131,11 @@ export async function editPlayersV2(
   return handleResponse(res);
 }
 
-// ── Scheduler ────────────────────────────────────────────────────────────────
+// ── Match Discovery (manual only) ───────────────────────────────────────────
 
 export async function triggerDiscovery() {
-  const res = await fetch(`${BASE}/api/v2/scheduler/run`, {
+  const res = await fetch(`${BASE}/api/v2/sync-matches`, {
     method: "POST",
-    headers: authHeaders(),
-  });
-  return handleResponse(res);
-}
-
-export async function getSchedulerStatus() {
-  const res = await fetch(`${BASE}/api/v2/scheduler/status`, {
     headers: authHeaders(),
   });
   return handleResponse(res);

@@ -23,7 +23,7 @@ from backend.api.auth import router_auth
 logger = get_logger(__name__)
 
 
-# ── Lifespan: create tables + start scheduler ─────────────────────────────────
+# ── Lifespan: create tables ────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -34,17 +34,18 @@ async def lifespan(app: FastAPI):
         Base.metadata.create_all(bind=engine)
         logger.info("Database tables created/verified")
 
-        from backend.scheduler.scheduler import start_scheduler
-        start_scheduler()
+        # Start the background extraction worker
+        from backend.services.extraction_worker import start_worker
+        start_worker()
     else:
-        logger.warning("DATABASE_URL not set — V2 features (DB, scheduler) disabled")
+        logger.warning("DATABASE_URL not set — V2 features disabled")
 
     yield
 
     # Shutdown
     if db_url:
-        from backend.scheduler.scheduler import stop_scheduler
-        stop_scheduler()
+        from backend.services.extraction_worker import stop_worker
+        stop_worker()
 
 
 # ── App ────────────────────────────────────────────────────────────────────────

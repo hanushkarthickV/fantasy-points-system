@@ -74,6 +74,14 @@ def _process_one_job() -> bool:
             match.team1 = metadata.team1
             match.team2 = metadata.team2
             match.title = metadata.match_title
+            if metadata.venue:
+                match.venue = metadata.venue
+            if metadata.date:
+                try:
+                    from dateutil.parser import parse as parse_date
+                    match.match_date = parse_date(metadata.date)
+                except Exception:
+                    pass  # best-effort date parsing
             extraction.status = "success"
             extraction.completed_at = datetime.utcnow()
 

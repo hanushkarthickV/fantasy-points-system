@@ -273,6 +273,17 @@ async def calculate_points_v2(match_id: int, db: Session = Depends(get_db)):
     return points.model_dump()
 
 
+@router_v2.get("/matches/{match_id}/points")
+async def get_match_points(match_id: int, db: Session = Depends(get_db)):
+    """Return the calculated points for a match."""
+    match = db.query(Match).filter_by(id=match_id).first()
+    if not match:
+        raise HTTPException(404, "Match not found")
+    if not match.points_json:
+        raise HTTPException(422, "Points not yet calculated")
+    return match.points_json
+
+
 # ── Sheet Update ──────────────────────────────────────────────────────────────
 
 @router_v2.post("/matches/{match_id}/update-sheet")

@@ -121,6 +121,13 @@ export function extractMatchStream(
 
 // ── Points & Sheet ───────────────────────────────────────────────────────────
 
+export async function fetchMatchPoints(matchId: number) {
+  const res = await fetch(`${BASE}/api/v2/matches/${matchId}/points`, {
+    headers: authHeaders(),
+  });
+  return handleResponse(res);
+}
+
 export async function calculatePointsV2(matchId: number) {
   const res = await fetch(`${BASE}/api/v2/matches/${matchId}/calculate`, {
     method: "POST",

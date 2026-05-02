@@ -9,6 +9,8 @@ import {
   FileSpreadsheet,
   LogOut,
   Loader2,
+  Eye,
+  ArrowLeft,
 } from "lucide-react";
 import {
   fetchMatches,
@@ -16,8 +18,12 @@ import {
   calculatePointsV2,
   updateSheetV2,
   triggerDiscovery,
+  fetchMatchPoints,
+  editPlayersV2,
   type MatchItem,
 } from "../services/api_v2";
+import PointsReview from "../components/PointsReview";
+import type { MatchPoints } from "../types";
 
 // ── Status badge config ──────────────────────────────────────────────────────
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
@@ -44,6 +50,11 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
   const [progressMsg, setProgressMsg] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<number | null>(null);
+  // Review modal state
+  const [reviewMatchId, setReviewMatchId] = useState<number | null>(null);
+  const [reviewPoints, setReviewPoints] = useState<MatchPoints | null>(null);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewMatch, setReviewMatch] = useState<MatchItem | null>(null);
 
   const loadMatches = async () => {
     setLoading(true);
@@ -123,6 +134,57 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
     }
   };
 
+  const handleOpenReview = async (matchId: number) => {
+    setReviewLoading(true);
+    setError(null);
+    const match = matches.find((m) => m.id === matchId) || null;
+    setReviewMatch(match);
+    try {
+      const pts = await fetchMatchPoints(matchId);
+      setReviewPoints(pts as MatchPoints);
+      setReviewMatchId(matchId);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setReviewLoading(false);
+    }
+  };
+
+  const handleCloseReview = () => {
+    setReviewMatchId(null);
+    setReviewPoints(null);
+    setReviewMatch(null);
+  };
+
+  const handleReviewEditPlayers = async (
+    edits: { original_name: string; new_name?: string; new_total_points?: number }[]
+  ) => {
+    if (!reviewMatchId) return;
+    try {
+      const updated = await editPlayersV2(reviewMatchId, edits);
+      setReviewPoints(updated as MatchPoints);
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  const handleReviewApprove = async () => {
+    if (!reviewMatchId) return;
+    setActionLoading(reviewMatchId);
+    setError(null);
+    try {
+      await updateSheetV2(reviewMatchId);
+      setMatches((prev) =>
+        prev.map((m) => (m.id === reviewMatchId ? { ...m, status: "sheet_updated" } : m))
+      );
+      handleCloseReview();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const handleUpdateSheet = async (matchId: number) => {
     setActionLoading(matchId);
     setError(null);
@@ -172,13 +234,13 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
       case "points_calculated":
         actions.push(
           <button
-            key="sheet"
-            onClick={() => handleUpdateSheet(match.id)}
-            disabled={isThisLoading}
-            className="px-3 py-1.5 bg-green-500 hover:bg-green-600 disabled:bg-green-500/50 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors"
+            key="review"
+            onClick={() => handleOpenReview(match.id)}
+            disabled={reviewLoading}
+            className="px-3 py-1.5 bg-purple-500 hover:bg-purple-600 disabled:bg-purple-500/50 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors"
           >
-            {isThisLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileSpreadsheet className="w-3 h-3" />}
-            Update Sheet
+            {reviewLoading && reviewMatch?.id === match.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" />}
+            Review Points
           </button>
         );
         break;
@@ -327,6 +389,44 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
           </div>
         )}
       </main>
+
+      {/* ── Review Points Modal (full-screen overlay) ────────────────────── */}
+      {reviewMatchId && reviewPoints && (
+        <div className="fixed inset-0 z-[100] bg-gray-950 overflow-y-auto">
+          {/* Modal header */}
+          <header className="border-b border-gray-800 bg-gray-950/80 backdrop-blur sticky top-0 z-50">
+            <div className="max-w-5xl mx-auto px-6 py-4 flex items-center gap-3">
+              <button
+                onClick={handleCloseReview}
+                className="p-2 rounded-lg hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
+                title="Back to matches"
+              >
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+              <div className="flex-1 min-w-0">
+                <h1 className="text-lg font-bold text-white truncate">
+                  Review Points — {reviewMatch?.team1 && reviewMatch?.team2
+                    ? `${reviewMatch.team1} vs ${reviewMatch.team2}`
+                    : `Match #${reviewMatch?.match_number || reviewMatchId}`}
+                </h1>
+                <p className="text-xs text-gray-500">
+                  Edit player names or points, then approve to update the spreadsheet
+                </p>
+              </div>
+            </div>
+          </header>
+
+          {/* PointsReview component (reused from V1) */}
+          <main className="max-w-5xl mx-auto px-6 py-8">
+            <PointsReview
+              points={reviewPoints}
+              onApprove={handleReviewApprove}
+              onEditPlayers={handleReviewEditPlayers}
+              loading={actionLoading === reviewMatchId}
+            />
+          </main>
+        </div>
+      )}
     </div>
   );
 }

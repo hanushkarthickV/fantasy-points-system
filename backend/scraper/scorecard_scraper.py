@@ -185,7 +185,7 @@ def _parse_innings(container: ElementWrapper, team_name: str) -> InningsData:
     """Parse a single innings container into InningsData."""
     # ── Batting ────────────────────────────────────────────────────────────────
     batting_table = container.find("table.ci-scorecard-table")
-    batting_entries, dismissal_details = _parse_batting_table(batting_table)
+    batting_entries, dismissal_details, keeper_name = _parse_batting_table(batting_table)
 
     # ── Extras & Total from batting table footer rows ──────────────────────────
     extras = 0
@@ -220,6 +220,7 @@ def _parse_innings(container: ElementWrapper, team_name: str) -> InningsData:
         fielding=fielding_entries,
         did_not_bat=did_not_bat,
         dismissals=dismissal_details,
+        wicketkeeper=keeper_name,
         extras=extras,
         total_runs=total_runs,
         total_wickets=total_wickets,
@@ -229,16 +230,20 @@ def _parse_innings(container: ElementWrapper, team_name: str) -> InningsData:
 
 # ── Batting Parsing ────────────────────────────────────────────────────────────
 
-def _parse_batting_table(table: ElementWrapper) -> tuple[list[BattingEntry], list[DismissalDetail]]:
-    """Parse batting rows from the scorecard table."""
+def _parse_batting_table(table: ElementWrapper) -> tuple[list[BattingEntry], list[DismissalDetail], str | None]:
+    """Parse batting rows from the scorecard table.
+    
+    Returns (batting_entries, dismissal_details, wicketkeeper_name_or_None).
+    """
     if table is None:
-        return [], []
+        return [], [], None
 
     batting: list[BattingEntry] = []
     dismissals: list[DismissalDetail] = []
+    keeper_name: str | None = None
     tbody = table.find("tbody")
     if tbody is None:
-        return [], []
+        return [], [], None
 
     rows = tbody.get_table_rows()
 
@@ -265,6 +270,13 @@ def _parse_batting_table(table: ElementWrapper) -> tuple[list[BattingEntry], lis
             continue
 
         raw_name = name_link.get_text()
+
+        # Detect wicketkeeper: raw name contains † symbol
+        if '\u2020' in raw_name:
+            cleaned = _clean_player_name(raw_name)
+            keeper_name = cleaned
+            logger.debug("[SCRAPER] Detected wicketkeeper: %s", keeper_name)
+
         name = _clean_player_name(raw_name)
 
         # Dismissal text from 2nd cell
@@ -297,8 +309,8 @@ def _parse_batting_table(table: ElementWrapper) -> tuple[list[BattingEntry], lis
         dismissal_detail = _parse_dismissal(name, dismissal_text)
         dismissals.append(dismissal_detail)
 
-    logger.debug("[SCRAPER] Parsed %d batters from table", len(batting))
-    return batting, dismissals
+    logger.debug("[SCRAPER] Parsed %d batters from table (keeper=%s)", len(batting), keeper_name)
+    return batting, dismissals, keeper_name
 
 
 def _extract_totals_from_batting(table: ElementWrapper, locals_dict: dict) -> None:
@@ -441,16 +453,19 @@ def _parse_dismissal(batter_name: str, dismissal_text: str) -> DismissalDetail:
 
     # "c FielderName b BowlerName"  or  "c †FielderName b BowlerName"
     caught_match = re.match(
-        r"c\s+[†]?(.+?)\s+b\s+(.+)", text, re.IGNORECASE
+        r"c\s+[\u2020]?(.+?)\s+b\s+(.+)", text, re.IGNORECASE
     )
     if caught_match:
         fielder = _clean_player_name(caught_match.group(1))
         bowler = _clean_player_name(caught_match.group(2))
+        # † before fielder name indicates the wicketkeeper took the catch
+        is_keeper = '\u2020' in text
         return DismissalDetail(
             batter_name=batter_name,
             dismissal_type="caught",
             bowler_name=bowler,
             fielder_name=fielder,
+            is_keeper_catch=is_keeper,
         )
 
     # "lbw b BowlerName"
@@ -579,6 +594,8 @@ def _resolve_short_names(innings_list: list[InningsData]) -> None:
     to full names (e.g. 'Heinrich Klaasen') using all known player names
     from batting + bowling across all innings.
 
+    Also resolves wicketkeeper catches using the identified keeper per team.
+
     Mutates the innings objects in-place.
     """
     # Build a set of all known full names from batting and bowling
@@ -588,6 +605,13 @@ def _resolve_short_names(innings_list: list[InningsData]) -> None:
             full_names.add(b.name)
         for b in inn.bowling:
             full_names.add(b.name)
+
+    # Build keeper map: team_name → keeper full name
+    keeper_map: dict[str, str] = {}
+    for inn in innings_list:
+        if inn.wicketkeeper:
+            keeper_map[inn.team_name] = inn.wicketkeeper
+            logger.debug("[RESOLVE] Keeper for %s: %s", inn.team_name, inn.wicketkeeper)
 
     # Build last-name → full-name mapping
     # If multiple players share a last name, skip (ambiguous)
@@ -616,9 +640,17 @@ def _resolve_short_names(innings_list: list[InningsData]) -> None:
         key = name.strip().lower()
         return last_name_map.get(key, name)
 
+    # Determine fielding team for each innings
+    all_teams = set(inn.team_name for inn in innings_list)
+
     resolved_count = 0
 
     for inn in innings_list:
+        # The fielding team is the OTHER team
+        fielding_teams = all_teams - {inn.team_name}
+        fielding_team = fielding_teams.pop() if fielding_teams else None
+        fielding_keeper = keeper_map.get(fielding_team) if fielding_team else None
+
         # Resolve dismissal fielder/bowler names
         for d in inn.dismissals:
             if d.fielder_name:
@@ -631,6 +663,12 @@ def _resolve_short_names(innings_list: list[InningsData]) -> None:
                         logger.debug("[RESOLVE] fielder '%s' → '%s'", d.fielder_name, new_name)
                         resolved_count += 1
                     d.fielder_name = new_name
+                elif d.is_keeper_catch and fielding_keeper:
+                    # Wicketkeeper catch: resolve to the known keeper
+                    if d.fielder_name not in full_names:
+                        logger.debug("[RESOLVE] keeper catch '%s' → '%s'", d.fielder_name, fielding_keeper)
+                        d.fielder_name = fielding_keeper
+                        resolved_count += 1
                 else:
                     new_name = resolve(d.fielder_name)
                     if new_name != d.fielder_name:

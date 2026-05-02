@@ -77,6 +77,7 @@ class DismissalDetail(BaseModel):
     bowler_name: Optional[str] = None
     fielder_name: Optional[str] = None
     is_direct_run_out: bool = False
+    is_keeper_catch: bool = False   # True when † indicates wicketkeeper took the catch
 
 
 class InningsData(BaseModel):
@@ -86,6 +87,7 @@ class InningsData(BaseModel):
     fielding: list[FieldingEntry]
     did_not_bat: list[str]
     dismissals: list[DismissalDetail]
+    wicketkeeper: Optional[str] = None  # Full name of the team's wicketkeeper
     extras: int = 0
     total_runs: int = 0
     total_wickets: int = 0

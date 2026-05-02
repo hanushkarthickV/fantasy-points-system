@@ -78,7 +78,11 @@ class MatchService:
     # ── Step 4: Edit Players ───────────────────────────────────────────────────
 
     def edit_players(self, match_id: str, edits: list[PlayerEdit]) -> MatchPoints:
-        """Apply name/points edits to the saved points JSON and re-save."""
+        """Apply name/points edits to the saved points JSON and re-save.
+
+        When renaming a player to a name that already exists, the entries are
+        merged: points are summed and only one Playing XI bonus is retained.
+        """
         points = self._load_points(match_id)
         player_map = {p.name: p for p in points.players}
 
@@ -89,10 +93,54 @@ class MatchService:
                 continue
             if edit.new_name is not None and edit.new_name != edit.original_name:
                 del player_map[edit.original_name]
-                player.name = edit.new_name
-                player_map[edit.new_name] = player
+                if edit.new_name in player_map:
+                    # Merge into existing player — remove duplicate Playing XI bonus
+                    existing = player_map[edit.new_name]
+                    base_points = player.total_points - player.playing_xi_bonus
+                    existing.total_points += base_points
+                    # Merge breakdowns
+                    if player.batting:
+                        if existing.batting:
+                            existing.batting.run_points += player.batting.run_points
+                            existing.batting.four_bonus += player.batting.four_bonus
+                            existing.batting.six_bonus += player.batting.six_bonus
+                            existing.batting.milestone_bonus += player.batting.milestone_bonus
+                            existing.batting.duck_penalty += player.batting.duck_penalty
+                            existing.batting.strike_rate_bonus += player.batting.strike_rate_bonus
+                            existing.batting.total += player.batting.total
+                        else:
+                            existing.batting = player.batting
+                    if player.bowling:
+                        if existing.bowling:
+                            existing.bowling.wicket_points += player.bowling.wicket_points
+                            existing.bowling.maiden_bonus += player.bowling.maiden_bonus
+                            existing.bowling.lbw_bowled_bonus += player.bowling.lbw_bowled_bonus
+                            existing.bowling.haul_bonus += player.bowling.haul_bonus
+                            existing.bowling.dot_ball_points += player.bowling.dot_ball_points
+                            existing.bowling.economy_bonus += player.bowling.economy_bonus
+                            existing.bowling.total += player.bowling.total
+                        else:
+                            existing.bowling = player.bowling
+                    if player.fielding:
+                        if existing.fielding:
+                            existing.fielding.catch_points += player.fielding.catch_points
+                            existing.fielding.catch_bonus += player.fielding.catch_bonus
+                            existing.fielding.stumping_points += player.fielding.stumping_points
+                            existing.fielding.run_out_points += player.fielding.run_out_points
+                            existing.fielding.total += player.fielding.total
+                        else:
+                            existing.fielding = player.fielding
+                    logger.info(
+                        "Merged '%s' into '%s' — new total: %d",
+                        edit.original_name, edit.new_name, existing.total_points,
+                    )
+                else:
+                    player.name = edit.new_name
+                    player_map[edit.new_name] = player
             if edit.new_total_points is not None:
-                player.total_points = edit.new_total_points
+                target = player_map.get(edit.new_name or edit.original_name)
+                if target:
+                    target.total_points = edit.new_total_points
 
         points.players = list(player_map.values())
         self._save_match_json(match_id, "points.json", points.model_dump())

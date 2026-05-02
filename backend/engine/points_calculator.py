@@ -73,6 +73,12 @@ def calculate_match_points(
             pp.fielding = calculate_fielding_points(entry)
             pp.total_points += pp.fielding.total
 
+    # ── Add "Did not bat" players — they are part of the Playing XI ────────
+    for innings in metadata.innings:
+        batting_team = innings.team_name
+        for name in innings.did_not_bat:
+            _get_or_create(player_map, name, batting_team)
+
     # ── Playing XI bonus: +4 for every player who featured ───────────────
     PLAYING_XI_BONUS = 4
     for pp in player_map.values():

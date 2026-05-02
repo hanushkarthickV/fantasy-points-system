@@ -64,7 +64,7 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
   const [reviewMode, setReviewMode] = useState<"review" | "history">("review");
   const [retryLoading, setRetryLoading] = useState(false);
 
-  // Last sync time
+  // Last sync time (from DB via API, shared across all users/sessions)
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
 
   // Auto-poll ref
@@ -75,6 +75,7 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
     try {
       const res = await fetchMatches();
       setMatches(res.matches);
+      if (res.last_sync_time) setLastSyncTime(res.last_sync_time);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -94,6 +95,7 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
         try {
           const res = await fetchMatches();
           setMatches(res.matches);
+          if (res.last_sync_time) setLastSyncTime(res.last_sync_time);
         } catch { /* ignore */ }
       }, 5000);
     } else if (!hasActive && pollRef.current) {
@@ -115,8 +117,7 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
     setError(null);
     try {
       await triggerDiscovery();
-      setLastSyncTime(new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }));
-      await loadMatches();
+      await loadMatches(); // loadMatches picks up last_sync_time from API
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -153,13 +154,11 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
       setReviewPoints(pts as MatchPoints);
       setReviewMatchId(matchId);
 
-      // If viewing history and sheet was already updated, fetch the result
-      if (mode === "history" && match?.status === "sheet_updated") {
-        try {
-          const sr = await fetchSheetResult(matchId);
-          setReviewSheetResult(sr as SheetUpdateResponse);
-        } catch { /* no sheet result yet */ }
-      }
+      // Load existing sheet result (for both review and history, to restore state)
+      try {
+        const sr = await fetchSheetResult(matchId);
+        setReviewSheetResult(sr as SheetUpdateResponse);
+      } catch { /* no sheet result yet — that's fine */ }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -218,16 +217,24 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
     setRetryLoading(true);
     setError(null);
     try {
-      const retryResult = (await retryUnmatchedV2(reviewMatchId, nameCorrections)) as SheetUpdateResponse;
+      const { points, sheet_result, all_matched } = await retryUnmatchedV2(reviewMatchId, nameCorrections);
+      // Update the player list with corrected/renamed names
+      setReviewPoints(points as MatchPoints);
       // Merge newly matched into existing sheet result
       setReviewSheetResult((prev) => {
-        if (!prev) return retryResult;
+        if (!prev) return sheet_result as SheetUpdateResponse;
         return {
           ...prev,
-          updated_players: [...prev.updated_players, ...retryResult.updated_players],
-          unmatched_players: retryResult.unmatched_players, // remaining unmatched
+          updated_players: [...prev.updated_players, ...sheet_result.updated_players],
+          unmatched_players: sheet_result.unmatched_players,
         };
       });
+      // If all matched, update status in local list → enables History button
+      if (all_matched) {
+        setMatches((prev) =>
+          prev.map((m) => (m.id === reviewMatchId ? { ...m, status: "sheet_updated" } : m))
+        );
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -394,7 +401,11 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
           </div>
           <div className="flex items-center gap-3">
             {lastSyncTime && (
-              <span className="text-xs text-gray-500">Last synced: {lastSyncTime}</span>
+              <span className="text-xs text-gray-500">
+                Last synced: {new Date(lastSyncTime).toLocaleString("en-IN", {
+                  day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"
+                })}
+              </span>
             )}
             <span className="text-sm text-gray-500">{matches.length} matches</span>
           </div>
@@ -527,6 +538,7 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
                   onApprove={handleReviewApprove}
                   onEditPlayers={handleReviewEditPlayers}
                   loading={sheetUpdateLoading}
+                  hideApprove={!!reviewSheetResult}
                 />
 
                 {/* Sheet Update Results (shown INLINE after update, stays on screen) */}
@@ -577,14 +589,7 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
                   </div>
                 </div>
 
-                {/* Sheet update results */}
-                {reviewSheetResult ? (
-                  <SheetResultsPanel result={reviewSheetResult} readOnly />
-                ) : (
-                  <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-6 text-center">
-                    <p className="text-gray-400 text-sm">No sheet update results available yet.</p>
-                  </div>
-                )}
+                {/* No sheet results table in history mode — only shown in review mode */}
               </>
             )}
           </main>

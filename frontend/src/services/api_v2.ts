@@ -61,6 +61,7 @@ export interface MatchItem {
 export interface MatchListResponse {
   matches: MatchItem[];
   total: number;
+  last_sync_time: string | null;
 }
 
 export async function fetchMatches(
@@ -136,7 +137,7 @@ export async function editPlayersV2(
 export async function retryUnmatchedV2(
   matchId: number,
   nameCorrections: Record<string, string>
-) {
+): Promise<{ points: any; sheet_result: any; all_matched: boolean }> {
   const res = await fetch(`${BASE}/api/v2/matches/${matchId}/retry-unmatched`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json" },

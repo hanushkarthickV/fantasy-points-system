@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from backend.db.base import get_db
 from backend.db.models import (
+    AppConfig,
     ExtractionQueue,
     Match,
     MatchStatus,
@@ -64,6 +65,7 @@ class MatchListItem(BaseModel):
 class MatchListResponse(BaseModel):
     matches: list[MatchListItem]
     total: int
+    last_sync_time: str | None = None
 
 
 class QueueItem(BaseModel):
@@ -94,9 +96,15 @@ async def list_matches(
         q = q.filter(Match.status == status)
     total = q.count()
     matches = q.offset(offset).limit(limit).all()
+
+    # Fetch persistent last sync time
+    sync_cfg = db.query(AppConfig).filter_by(key="last_sync_time").first()
+    last_sync = sync_cfg.value if sync_cfg else None
+
     return MatchListResponse(
         matches=[MatchListItem.model_validate(m) for m in matches],
         total=total,
+        last_sync_time=last_sync,
     )
 
 
@@ -175,9 +183,11 @@ async def update_sheet_v2(match_id: int, db: Session = Depends(get_db)):
     points = MatchPoints(**match.points_json)
     result = _sheet_service.update_points_from_match(points)
 
-    # Store the result and update status
+    # Store the result; only mark sheet_updated when ALL players matched
     match.sheet_update_json = result.model_dump()
-    match.status = MatchStatus.SHEET_UPDATED.value
+    if len(result.unmatched_players) == 0:
+        match.status = MatchStatus.SHEET_UPDATED.value
+    # else stays points_calculated so user can retry unmatched
     db.commit()
 
     return result.model_dump()
@@ -201,7 +211,9 @@ class RetryUnmatchedV2Request(BaseModel):
 
 @router_v2.post("/matches/{match_id}/retry-unmatched")
 async def retry_unmatched_v2(match_id: int, request: RetryUnmatchedV2Request, db: Session = Depends(get_db)):
-    """Retry sheet update for unmatched players with user-provided corrected names."""
+    """Retry sheet update for unmatched players with user-provided corrected names.
+    Also renames the player in points_json (merges if duplicate, dedup playing XI).
+    Returns updated points + sheet result + all_matched flag."""
     match = db.query(Match).filter_by(id=match_id).first()
     if not match:
         raise HTTPException(404, "Match not found")
@@ -209,18 +221,73 @@ async def retry_unmatched_v2(match_id: int, request: RetryUnmatchedV2Request, db
         raise HTTPException(422, "Points not yet calculated")
 
     points = MatchPoints(**match.points_json)
-    result = _sheet_service.update_specific_players(points, request.name_corrections)
+    player_map = {p.name: p for p in points.players}
 
-    # Merge retry results into the stored sheet_update_json
-    existing = match.sheet_update_json or {"match_id": str(match_id), "updated_players": [], "unmatched_players": []}
-    existing["updated_players"] = existing.get("updated_players", []) + [p.model_dump() for p in result.updated_players]
-    existing["unmatched_players"] = result.unmatched_players  # remaining unmatched
-    match.sheet_update_json = existing
+    # Detect merge cases and build points_override for sheet push
+    points_override: dict[str, int] = {}
+    for display_key, corrected_name in request.name_corrections.items():
+        scraped = display_key.split(" (best:")[0].strip() if " (best:" in display_key else display_key
+        player = player_map.get(scraped)
+        if player and corrected_name in player_map and corrected_name != scraped:
+            # Merge case — push only base points (dedup playing XI)
+            points_override[scraped] = player.total_points - player.playing_xi_bonus
+
+    # 1. Push corrections to sheet (uses original names from points_json)
+    result = _sheet_service.update_specific_players(
+        points, request.name_corrections, points_override=points_override or None
+    )
+
+    # 2. Rename/merge players in points_json
+    for display_key, corrected_name in request.name_corrections.items():
+        scraped = display_key.split(" (best:")[0].strip() if " (best:" in display_key else display_key
+        player = player_map.get(scraped)
+        if not player or corrected_name == scraped:
+            continue
+        del player_map[scraped]
+        if corrected_name in player_map:
+            # Merge — dedup playing XI bonus
+            existing = player_map[corrected_name]
+            base_pts = player.total_points - player.playing_xi_bonus
+            existing.total_points += base_pts
+            if player.fielding:
+                if existing.fielding:
+                    existing.fielding.catch_points += player.fielding.catch_points
+                    existing.fielding.catch_bonus += player.fielding.catch_bonus
+                    existing.fielding.stumping_points += player.fielding.stumping_points
+                    existing.fielding.run_out_points += player.fielding.run_out_points
+                    existing.fielding.total += player.fielding.total
+                else:
+                    existing.fielding = player.fielding
+            if player.batting and not existing.batting:
+                existing.batting = player.batting
+            if player.bowling and not existing.bowling:
+                existing.bowling = player.bowling
+        else:
+            player.name = corrected_name
+            player_map[corrected_name] = player
+
+    points.players = list(player_map.values())
+    match.points_json = points.model_dump()
+
+    # 3. Merge retry results into stored sheet_update_json
+    stored = match.sheet_update_json or {"match_id": str(match_id), "updated_players": [], "unmatched_players": []}
+    stored["updated_players"] = stored.get("updated_players", []) + [p.model_dump() for p in result.updated_players]
+    stored["unmatched_players"] = result.unmatched_players  # remaining
+    match.sheet_update_json = stored
+
+    # 4. If all matched, mark sheet_updated
+    all_matched = len(result.unmatched_players) == 0
+    if all_matched:
+        match.status = MatchStatus.SHEET_UPDATED.value
     db.commit()
 
     logger.info("[API] Retry unmatched for match #%s: %d updated, %d still unmatched",
                 match.match_number, len(result.updated_players), len(result.unmatched_players))
-    return result.model_dump()
+    return {
+        "points": points.model_dump(),
+        "sheet_result": result.model_dump(),
+        "all_matched": all_matched,
+    }
 
 
 # ── Edit Players ──────────────────────────────────────────────────────────────
@@ -285,11 +352,21 @@ async def edit_players_v2(match_id: int, request: EditPlayersRequest, db: Sessio
 # ── Match Discovery (manual only) ────────────────────────────────────────────
 
 @router_v2.post("/sync-matches")
-async def sync_matches():
+async def sync_matches(db: Session = Depends(get_db)):
     """Manually trigger match discovery from ESPN schedule page."""
     from backend.scheduler.match_discovery import discover_matches
     try:
         new_count = discover_matches()
+
+        # Persist last sync timestamp
+        now_str = datetime.utcnow().isoformat() + "Z"
+        cfg = db.query(AppConfig).filter_by(key="last_sync_time").first()
+        if cfg:
+            cfg.value = now_str
+        else:
+            db.add(AppConfig(key="last_sync_time", value=now_str))
+        db.commit()
+
         return {"message": f"Discovery complete — {new_count} new matches", "new_matches": new_count}
     except Exception as e:
         raise HTTPException(500, f"Discovery failed: {str(e)[:200]}")

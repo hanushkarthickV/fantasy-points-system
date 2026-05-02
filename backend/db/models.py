@@ -114,6 +114,19 @@ class ExtractionQueue(Base):
         return f"<ExtractionQueue match_id={self.match_id} status={self.status}>"
 
 
+# ── App Config (persistent key-value store) ──────────────────────────────────
+
+class AppConfig(Base):
+    __tablename__ = "app_config"
+
+    key = Column(String(128), primary_key=True)
+    value = Column(Text, nullable=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    def __repr__(self) -> str:
+        return f"<AppConfig {self.key}={self.value}>"
+
+
 # ── User ──────────────────────────────────────────────────────────────────────
 
 class User(Base):

@@ -13,9 +13,10 @@ interface Props {
   onApprove: () => Promise<void>;
   onEditPlayers: (edits: { original_name: string; new_name?: string; new_total_points?: number }[]) => Promise<void>;
   loading: boolean;
+  hideApprove?: boolean;
 }
 
-export default function PointsReview({ points, onApprove, onEditPlayers, loading }: Props) {
+export default function PointsReview({ points, onApprove, onEditPlayers, loading, hideApprove }: Props) {
   const sorted = [...points.players].sort((a, b) => b.total_points - a.total_points);
   const [pendingEdits, setPendingEdits] = useState<
     Map<string, { newName?: string; newPoints?: number }>
@@ -65,12 +66,13 @@ export default function PointsReview({ points, onApprove, onEditPlayers, loading
             rank={i + 1}
             pendingEdit={pendingEdits.get(p.name)}
             onEdit={(field, val) => handleEdit(p.name, field, val)}
+            readOnly={hideApprove}
           />
         ))}
       </div>
 
       {/* Save edits bar */}
-      {hasPending && (
+      {hasPending && !hideApprove && (
         <div className="flex items-center gap-3 bg-indigo-500/10 border border-indigo-500/30 rounded-xl p-4">
           <Pencil className="w-5 h-5 text-indigo-400 shrink-0" />
           <span className="text-indigo-200 text-sm flex-1">
@@ -92,27 +94,29 @@ export default function PointsReview({ points, onApprove, onEditPlayers, loading
         </div>
       )}
 
-      {/* Approve Button */}
-      <button
-        onClick={onApprove}
-        disabled={loading || hasPending}
-        className="w-full flex items-center justify-center gap-2 px-6 py-3 rounded-xl 
-                   bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed 
-                   text-white font-semibold transition"
-      >
-        {loading ? (
-          <>
-            <Loader2 className="w-5 h-5 animate-spin" />
-            Updating spreadsheet...
-          </>
-        ) : (
-          <>
-            <Upload className="w-5 h-5" />
-            Approve &amp; Update Spreadsheet
-            <ArrowRight className="w-5 h-5" />
-          </>
-        )}
-      </button>
+      {/* Approve Button (hidden after sheet was already pushed) */}
+      {!hideApprove && (
+        <button
+          onClick={onApprove}
+          disabled={loading || hasPending}
+          className="w-full flex items-center justify-center gap-2 px-6 py-3 rounded-xl 
+                     bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed 
+                     text-white font-semibold transition"
+        >
+          {loading ? (
+            <>
+              <Loader2 className="w-5 h-5 animate-spin" />
+              Updating spreadsheet...
+            </>
+          ) : (
+            <>
+              <Upload className="w-5 h-5" />
+              Approve &amp; Update Spreadsheet
+              <ArrowRight className="w-5 h-5" />
+            </>
+          )}
+        </button>
+      )}
     </div>
   );
 }
@@ -124,11 +128,13 @@ function PlayerAccordion({
   rank,
   pendingEdit,
   onEdit,
+  readOnly,
 }: {
   player: PlayerPoints;
   rank: number;
   pendingEdit?: { newName?: string; newPoints?: number };
   onEdit: (field: "name" | "points", value: string) => void;
+  readOnly?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -197,13 +203,15 @@ function PlayerAccordion({
             </span>
           )}
 
-          <button
-            onClick={(e) => { e.stopPropagation(); setEditing(!editing); }}
-            className={`p-1 rounded transition ${editing ? "text-indigo-400 bg-indigo-500/20" : "text-gray-500 hover:text-gray-300"}`}
-            title={editing ? "Done editing" : "Edit player"}
-          >
-            <Pencil className="w-3.5 h-3.5" />
-          </button>
+          {!readOnly && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setEditing(!editing); }}
+              className={`p-1 rounded transition ${editing ? "text-indigo-400 bg-indigo-500/20" : "text-gray-500 hover:text-gray-300"}`}
+              title={editing ? "Done editing" : "Edit player"}
+            >
+              <Pencil className="w-3.5 h-3.5" />
+            </button>
+          )}
 
           <button onClick={() => setOpen(!open)}>
             <ChevronDown

@@ -159,6 +159,7 @@ class SheetService:
         self,
         match_points: MatchPoints,
         name_corrections: dict[str, str],
+        points_override: dict[str, int] | None = None,
     ) -> SheetUpdateResponse:
         """
         Update sheet for specific players using exact corrected names.
@@ -191,7 +192,7 @@ class SheetService:
             # Extract the actual scraped name (strip " (best: ..., score: ..)" suffix)
             scraped_name = display_name.split(" (best:")[0].strip() if " (best:" in display_name else display_name
 
-            pts = player_points_map.get(scraped_name, 0)
+            pts = (points_override or {}).get(scraped_name, player_points_map.get(scraped_name, 0))
 
             # Case-insensitive lookup: try exact first, then lowercase
             actual_key = corrected_name if corrected_name in sheet_lookup else sheet_lookup_lower.get(corrected_name.lower())

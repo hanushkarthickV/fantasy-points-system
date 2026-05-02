@@ -2,6 +2,8 @@
 FastAPI application entry point for the Fantasy Points System.
 """
 
+import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -15,14 +17,42 @@ from backend.logger import setup_logging, get_logger
 setup_logging()
 
 from backend.api.routes import router
+from backend.api.routes_v2 import router_v2
+from backend.api.auth import router_auth
 
 logger = get_logger(__name__)
+
+
+# ── Lifespan: create tables + start scheduler ─────────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    db_url = os.getenv("DATABASE_URL", "")
+    if db_url:
+        from backend.db.base import engine, Base
+        from backend.db import models  # noqa: F401 — registers models
+        Base.metadata.create_all(bind=engine)
+        logger.info("Database tables created/verified")
+
+        from backend.scheduler.scheduler import start_scheduler
+        start_scheduler()
+    else:
+        logger.warning("DATABASE_URL not set — V2 features (DB, scheduler) disabled")
+
+    yield
+
+    # Shutdown
+    if db_url:
+        from backend.scheduler.scheduler import stop_scheduler
+        stop_scheduler()
+
 
 # ── App ────────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="Fantasy Points System",
     description="Automated T20 fantasy-points calculator with ESPNcricinfo scraping",
-    version="1.0.0",
+    version="2.0.0",
+    lifespan=lifespan,
 )
 
 # CORS — allow the React dev server
@@ -34,12 +64,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(router)
+app.include_router(router)      # V1 routes (backwards compatible)
+app.include_router(router_v2)   # V2 routes (match listing, extraction)
+app.include_router(router_auth) # Auth routes
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": "2.0.0"}
 
 
 # ── Serve frontend build (production) ─────────────────────────────────────────

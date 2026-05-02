@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Trophy, AlertCircle } from "lucide-react";
 import UrlInput from "./components/UrlInput";
 import ScorecardReview from "./components/ScorecardReview";
 import PointsReview from "./components/PointsReview";
 import UpdateResults from "./components/UpdateResults";
+import AuthPage from "./pages/AuthPage";
+import MatchesPage from "./pages/MatchesPage";
 import {
   scrapeWithProgress,
   calculatePoints,
@@ -14,6 +16,7 @@ import {
 import type { MatchMetadata, MatchPoints, SheetUpdateResponse } from "./types";
 
 type Step = "input" | "review_scorecard" | "review_points" | "done";
+type AppMode = "v2" | "v1";
 
 const STEP_LABELS: Record<Step, string> = {
   input: "Enter URL",
@@ -25,6 +28,39 @@ const STEP_LABELS: Record<Step, string> = {
 const STEP_ORDER: Step[] = ["input", "review_scorecard", "review_points", "done"];
 
 export default function App() {
+  // Auth state
+  const [token, setToken] = useState<string | null>(localStorage.getItem("fps_token"));
+  const [email, setEmail] = useState<string>(localStorage.getItem("fps_email") || "");
+  const [mode, setMode] = useState<AppMode>("v2");
+
+  const handleAuth = (newToken: string, newEmail: string) => {
+    setToken(newToken);
+    setEmail(newEmail);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("fps_token");
+    localStorage.removeItem("fps_email");
+    setToken(null);
+    setEmail("");
+  };
+
+  // If not logged in, show auth page
+  if (!token) {
+    return <AuthPage onAuth={handleAuth} />;
+  }
+
+  // V2 mode — match listing
+  if (mode === "v2") {
+    return <MatchesPage email={email} onLogout={handleLogout} />;
+  }
+
+  // V1 mode below (legacy URL input flow)
+  return <V1Flow onBack={() => setMode("v2")} />;
+}
+
+/** Legacy V1 flow — URL input → review → update sheet */
+function V1Flow({ onBack }: { onBack: () => void }) {
   const [step, setStep] = useState<Step>("input");
   const [loading, setLoading] = useState(false);
   const [retryLoading, setRetryLoading] = useState(false);

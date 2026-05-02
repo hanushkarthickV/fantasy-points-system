@@ -194,6 +194,35 @@ async def get_sheet_result(match_id: int, db: Session = Depends(get_db)):
     return match.sheet_update_json
 
 
+# ── Retry Unmatched Players ───────────────────────────────────────────────────
+
+class RetryUnmatchedV2Request(BaseModel):
+    name_corrections: dict[str, str]  # {display_key: corrected_sheet_name}
+
+@router_v2.post("/matches/{match_id}/retry-unmatched")
+async def retry_unmatched_v2(match_id: int, request: RetryUnmatchedV2Request, db: Session = Depends(get_db)):
+    """Retry sheet update for unmatched players with user-provided corrected names."""
+    match = db.query(Match).filter_by(id=match_id).first()
+    if not match:
+        raise HTTPException(404, "Match not found")
+    if not match.points_json:
+        raise HTTPException(422, "Points not yet calculated")
+
+    points = MatchPoints(**match.points_json)
+    result = _sheet_service.update_specific_players(points, request.name_corrections)
+
+    # Merge retry results into the stored sheet_update_json
+    existing = match.sheet_update_json or {"match_id": str(match_id), "updated_players": [], "unmatched_players": []}
+    existing["updated_players"] = existing.get("updated_players", []) + [p.model_dump() for p in result.updated_players]
+    existing["unmatched_players"] = result.unmatched_players  # remaining unmatched
+    match.sheet_update_json = existing
+    db.commit()
+
+    logger.info("[API] Retry unmatched for match #%s: %d updated, %d still unmatched",
+                match.match_number, len(result.updated_players), len(result.unmatched_players))
+    return result.model_dump()
+
+
 # ── Edit Players ──────────────────────────────────────────────────────────────
 
 @router_v2.patch("/matches/{match_id}/edit-players")

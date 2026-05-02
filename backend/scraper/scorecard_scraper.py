@@ -613,7 +613,7 @@ def _resolve_short_names(innings_list: list[InningsData]) -> None:
             keeper_map[inn.team_name] = inn.wicketkeeper
             logger.debug("[RESOLVE] Keeper for %s: %s", inn.team_name, inn.wicketkeeper)
 
-    # Build last-name → full-name mapping
+    # Build last-name → full-name mapping (global)
     # If multiple players share a last name, skip (ambiguous)
     last_name_map: dict[str, str] = {}
     last_name_conflicts: set[str] = set()
@@ -631,17 +631,61 @@ def _resolve_short_names(innings_list: list[InningsData]) -> None:
     # Remove conflicting last names
     for conflict in last_name_conflicts:
         del last_name_map[conflict]
+    if last_name_conflicts:
+        logger.debug("[RESOLVE] Ambiguous last names (global): %s", last_name_conflicts)
 
-    def resolve(name: str) -> str:
+    # Build per-team player sets.
+    # In each innings: batters + DNB belong to inn.team_name,
+    # bowlers belong to the OTHER team.
+    all_teams = set(inn.team_name for inn in innings_list)
+    team_players_set: dict[str, set[str]] = {t: set() for t in all_teams}
+    for inn in innings_list:
+        batting_team = inn.team_name
+        bowling_teams = all_teams - {batting_team}
+        bowling_team = bowling_teams.pop() if bowling_teams else batting_team
+        for b in inn.batting:
+            team_players_set[batting_team].add(b.name)
+        for dnb in (inn.did_not_bat or []):
+            team_players_set[batting_team].add(dnb)
+        for b in inn.bowling:
+            team_players_set[bowling_team].add(b.name)
+
+    # Build per-team last-name maps
+    team_name_maps: dict[str, dict[str, str]] = {}
+    for team, players in team_players_set.items():
+        tmap: dict[str, str] = {}
+        t_conflicts: set[str] = set()
+        for full in players:
+            parts = full.split()
+            if len(parts) >= 2:
+                last = parts[-1].lower()
+                if last in tmap and tmap[last] != full:
+                    t_conflicts.add(last)
+                else:
+                    tmap[last] = full
+            tmap[full.lower()] = full
+        for c in t_conflicts:
+            del tmap[c]
+        team_name_maps[team] = tmap
+        logger.debug("[RESOLVE] Team '%s' name map: %s", team, tmap)
+
+    def resolve(name: str, team: str | None = None) -> str:
         if not name:
             return name
         if name in full_names:
             return name
         key = name.strip().lower()
-        return last_name_map.get(key, name)
-
-    # Determine fielding team for each innings
-    all_teams = set(inn.team_name for inn in innings_list)
+        # Try global map first
+        result = last_name_map.get(key)
+        if result:
+            return result
+        # If ambiguous globally, try team-specific map
+        if team and team in team_name_maps:
+            result = team_name_maps[team].get(key)
+            if result:
+                logger.debug("[RESOLVE] team-specific '%s' → '%s' (team=%s)", name, result, team)
+                return result
+        return name
 
     resolved_count = 0
 
@@ -657,7 +701,7 @@ def _resolve_short_names(innings_list: list[InningsData]) -> None:
                 # Handle compound "Fielder1/Fielder2" for indirect run-outs
                 if "/" in d.fielder_name:
                     parts = d.fielder_name.split("/")
-                    resolved_parts = [resolve(p.strip()) for p in parts]
+                    resolved_parts = [resolve(p.strip(), fielding_team) for p in parts]
                     new_name = "/".join(resolved_parts)
                     if new_name != d.fielder_name:
                         logger.debug("[RESOLVE] fielder '%s' → '%s'", d.fielder_name, new_name)
@@ -670,7 +714,7 @@ def _resolve_short_names(innings_list: list[InningsData]) -> None:
                         d.fielder_name = fielding_keeper
                         resolved_count += 1
                 else:
-                    new_name = resolve(d.fielder_name)
+                    new_name = resolve(d.fielder_name, fielding_team)
                     if new_name != d.fielder_name:
                         logger.debug("[RESOLVE] fielder '%s' → '%s'", d.fielder_name, new_name)
                         resolved_count += 1

@@ -131,6 +131,20 @@ export async function editPlayersV2(
   return handleResponse(res);
 }
 
+// ── Retry Unmatched Players ──────────────────────────────────────────────────
+
+export async function retryUnmatchedV2(
+  matchId: number,
+  nameCorrections: Record<string, string>
+) {
+  const res = await fetch(`${BASE}/api/v2/matches/${matchId}/retry-unmatched`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ name_corrections: nameCorrections }),
+  });
+  return handleResponse(res);
+}
+
 // ── Match Discovery (manual only) ───────────────────────────────────────────
 
 export async function triggerDiscovery() {

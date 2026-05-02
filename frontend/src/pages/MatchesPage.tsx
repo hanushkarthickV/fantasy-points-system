@@ -13,6 +13,9 @@ import {
   ArrowLeft,
   History,
   Info,
+  MapPin,
+  CalendarDays,
+  Send,
 } from "lucide-react";
 import {
   fetchMatches,
@@ -22,6 +25,7 @@ import {
   fetchMatchPoints,
   fetchSheetResult,
   editPlayersV2,
+  retryUnmatchedV2,
   type MatchItem,
 } from "../services/api_v2";
 import PointsReview from "../components/PointsReview";
@@ -58,6 +62,10 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
   const [reviewSheetResult, setReviewSheetResult] = useState<SheetUpdateResponse | null>(null);
   const [sheetUpdateLoading, setSheetUpdateLoading] = useState(false);
   const [reviewMode, setReviewMode] = useState<"review" | "history">("review");
+  const [retryLoading, setRetryLoading] = useState(false);
+
+  // Last sync time
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
 
   // Auto-poll ref
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -107,6 +115,7 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
     setError(null);
     try {
       await triggerDiscovery();
+      setLastSyncTime(new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }));
       await loadMatches();
     } catch (err: any) {
       setError(err.message);
@@ -202,6 +211,30 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
     }
   };
 
+  // ── Retry Unmatched Players ────────────────────────────────────────────────
+
+  const handleRetryUnmatched = async (nameCorrections: Record<string, string>) => {
+    if (!reviewMatchId) return;
+    setRetryLoading(true);
+    setError(null);
+    try {
+      const retryResult = (await retryUnmatchedV2(reviewMatchId, nameCorrections)) as SheetUpdateResponse;
+      // Merge newly matched into existing sheet result
+      setReviewSheetResult((prev) => {
+        if (!prev) return retryResult;
+        return {
+          ...prev,
+          updated_players: [...prev.updated_players, ...retryResult.updated_players],
+          unmatched_players: retryResult.unmatched_players, // remaining unmatched
+        };
+      });
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setRetryLoading(false);
+    }
+  };
+
   // ── Row Actions ────────────────────────────────────────────────────────────
 
   const getActions = (match: MatchItem) => {
@@ -273,8 +306,8 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
       );
     }
 
-    // Sheet Updated or Points Calculated — History button
-    if (match.status === "sheet_updated" || match.status === "points_calculated") {
+    // Sheet Updated — History button (only after sheet is updated, not alongside Review)
+    if (match.status === "sheet_updated") {
       actions.push(
         <button
           key="history"
@@ -315,8 +348,11 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
               <FileSpreadsheet className="w-5 h-5 text-indigo-400" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-white">Match Listing</h1>
-              <p className="text-xs text-gray-500">IPL 2026 Fantasy Points</p>
+              <h1 className="text-lg font-bold text-white">
+                Fantasy Points System
+                <span className="ml-2 text-xs font-normal text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">v2.0</span>
+              </h1>
+              <p className="text-xs text-gray-500">IPL 2026 • Automated Match Extraction &amp; Points Calculation</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -356,7 +392,12 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
               Sync Matches
             </button>
           </div>
-          <span className="text-sm text-gray-500">{matches.length} matches</span>
+          <div className="flex items-center gap-3">
+            {lastSyncTime && (
+              <span className="text-xs text-gray-500">Last synced: {lastSyncTime}</span>
+            )}
+            <span className="text-sm text-gray-500">{matches.length} matches</span>
+          </div>
         </div>
 
         {/* Error */}
@@ -407,9 +448,28 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
                           ? `${match.team1} vs ${match.team2}`
                           : match.title || `Match ${match.espn_match_id}`}
                       </p>
-                      {match.result_text && (
-                        <p className="text-xs text-gray-400 truncate mt-0.5">{match.result_text}</p>
-                      )}
+                      <div className="flex items-center gap-3 mt-0.5 flex-wrap">
+                        {match.result_text && (
+                          <span className="text-xs text-gray-400 truncate">{match.result_text}</span>
+                        )}
+                        {match.venue && (
+                          <span className="text-xs text-gray-500 flex items-center gap-1">
+                            <MapPin className="w-3 h-3" />{match.venue}
+                          </span>
+                        )}
+                        {match.match_date && (
+                          <span className="text-xs text-gray-500 flex items-center gap-1">
+                            <CalendarDays className="w-3 h-3" />
+                            {new Date(match.match_date).toLocaleDateString("en-IN", {
+                              day: "numeric", month: "short", year: "numeric"
+                            })}
+                            {" "}
+                            {new Date(match.match_date).toLocaleTimeString("en-IN", {
+                              hour: "2-digit", minute: "2-digit"
+                            })}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
 
@@ -459,91 +519,242 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
           </header>
 
           <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
-            {/* PointsReview component */}
-            <PointsReview
-              points={reviewPoints}
-              onApprove={handleReviewApprove}
-              onEditPlayers={handleReviewEditPlayers}
-              loading={sheetUpdateLoading}
-            />
+            {/* REVIEW MODE: full PointsReview with edit + approve */}
+            {reviewMode === "review" && (
+              <>
+                <PointsReview
+                  points={reviewPoints}
+                  onApprove={handleReviewApprove}
+                  onEditPlayers={handleReviewEditPlayers}
+                  loading={sheetUpdateLoading}
+                />
 
-            {/* Sheet Update Results (shown INLINE after update) */}
-            {reviewSheetResult && (
-              <div className="space-y-4">
-                <div className="bg-green-500/10 border border-green-500/30 rounded-xl p-4">
-                  <h3 className="text-sm font-semibold text-green-300 mb-2 flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4" />
-                    Sheet Updated Successfully
-                  </h3>
-                  <p className="text-xs text-green-200/70">
-                    {reviewSheetResult.updated_players.length} player(s) matched &middot;{" "}
-                    {reviewSheetResult.unmatched_players.length} unmatched
+                {/* Sheet Update Results (shown INLINE after update, stays on screen) */}
+                {reviewSheetResult && (
+                  <SheetResultsPanel
+                    result={reviewSheetResult}
+                    onRetry={handleRetryUnmatched}
+                    retryLoading={retryLoading}
+                  />
+                )}
+              </>
+            )}
+
+            {/* HISTORY MODE: read-only — only sheet update results, no edit/approve */}
+            {reviewMode === "history" && (
+              <>
+                {/* Read-only points summary */}
+                <div className="bg-gray-800/50 border border-gray-700 rounded-2xl p-6">
+                  <h2 className="text-xl font-bold text-white mb-1">Fantasy Points Summary</h2>
+                  <p className="text-gray-400 text-sm">
+                    {reviewPoints.players.length} players scored
                   </p>
                 </div>
-
-                {/* Matched Players Table */}
-                {reviewSheetResult.updated_players.length > 0 && (
-                  <div className="bg-gray-800/50 border border-gray-700 rounded-xl overflow-hidden">
-                    <div className="px-4 py-3 border-b border-gray-700">
-                      <h4 className="text-sm font-semibold text-white">
-                        Matched Players ({reviewSheetResult.updated_players.length})
-                      </h4>
-                    </div>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="text-gray-400 text-xs uppercase border-b border-gray-700/50">
-                            <th className="text-left px-4 py-2">Scraped Name</th>
-                            <th className="text-left px-4 py-2">Sheet Name</th>
-                            <th className="text-center px-3 py-2">Score</th>
-                            <th className="text-center px-3 py-2">Prev</th>
-                            <th className="text-center px-3 py-2">Added</th>
-                            <th className="text-center px-3 py-2">New</th>
+                <div className="bg-gray-800/50 border border-gray-700 rounded-xl overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-gray-400 text-xs uppercase border-b border-gray-700/50">
+                          <th className="text-left px-4 py-2">#</th>
+                          <th className="text-left px-4 py-2">Player</th>
+                          <th className="text-left px-4 py-2">Team</th>
+                          <th className="text-center px-3 py-2">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...reviewPoints.players]
+                          .sort((a, b) => b.total_points - a.total_points)
+                          .map((p, i) => (
+                          <tr key={p.name} className="border-b border-gray-700/30 hover:bg-gray-700/20">
+                            <td className="px-4 py-2 text-gray-500 font-mono text-xs">{i + 1}</td>
+                            <td className="px-4 py-2 font-medium text-white">{p.name}</td>
+                            <td className="px-4 py-2 text-gray-400 text-xs">{p.team}</td>
+                            <td className="text-center px-3 py-2 font-bold text-white">{p.total_points}</td>
                           </tr>
-                        </thead>
-                        <tbody>
-                          {reviewSheetResult.updated_players.map((p, i) => (
-                            <tr key={i} className="border-b border-gray-700/30 hover:bg-gray-700/20">
-                              <td className="px-4 py-2 text-gray-300">{p.scraped_name}</td>
-                              <td className="px-4 py-2 font-medium text-white">{p.matched_name}</td>
-                              <td className="text-center px-3 py-2 text-gray-400">{p.match_score}</td>
-                              <td className="text-center px-3 py-2 text-gray-400">{p.previous_points}</td>
-                              <td className="text-center px-3 py-2 text-emerald-400">+{p.added_points}</td>
-                              <td className="text-center px-3 py-2 font-semibold text-white">{p.new_points}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
-                )}
+                </div>
 
-                {/* Unmatched Players */}
-                {reviewSheetResult.unmatched_players.length > 0 && (
-                  <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4">
-                    <h4 className="text-sm font-semibold text-red-300 mb-2 flex items-center gap-2">
-                      <AlertTriangle className="w-4 h-4" />
-                      Unmatched Players ({reviewSheetResult.unmatched_players.length})
-                    </h4>
-                    <p className="text-xs text-red-200/70 mb-3">
-                      These players were not found in the Google Sheet. Go back to the points list above,
-                      edit their names to match the sheet, save edits, and update the sheet again.
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {reviewSheetResult.unmatched_players.map((name, i) => (
-                        <span
-                          key={i}
-                          className="px-3 py-1 rounded-lg bg-red-500/20 text-red-300 text-xs font-medium"
-                        >
-                          {name}
-                        </span>
-                      ))}
-                    </div>
+                {/* Sheet update results */}
+                {reviewSheetResult ? (
+                  <SheetResultsPanel result={reviewSheetResult} readOnly />
+                ) : (
+                  <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-6 text-center">
+                    <p className="text-gray-400 text-sm">No sheet update results available yet.</p>
                   </div>
                 )}
-              </div>
+              </>
             )}
           </main>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Sheet Results Panel (reused in both review and history) ─────────────────
+
+function SheetResultsPanel({
+  result,
+  onRetry,
+  retryLoading,
+  readOnly,
+}: {
+  result: SheetUpdateResponse;
+  onRetry?: (corrections: Record<string, string>) => Promise<void>;
+  retryLoading?: boolean;
+  readOnly?: boolean;
+}) {
+  const [corrections, setCorrections] = useState<Record<string, string>>({});
+
+  const handleRetryClick = () => {
+    if (!onRetry) return;
+    // Only send corrections where user actually typed something
+    const filled: Record<string, string> = {};
+    for (const [key, val] of Object.entries(corrections)) {
+      if (val.trim()) filled[key] = val.trim();
+    }
+    if (Object.keys(filled).length === 0) return;
+    onRetry(filled);
+    setCorrections({});
+  };
+
+  // Parse "PlayerName (best: SomeName, score: 71)" into parts
+  const parseUnmatched = (raw: string) => {
+    const match = raw.match(/^(.+?)\s*\(best:\s*(.+?),\s*score:\s*(\d+)\)$/);
+    if (match) return { displayKey: raw, scrapedName: match[1].trim(), bestMatch: match[2].trim(), score: parseInt(match[3]) };
+    return { displayKey: raw, scrapedName: raw, bestMatch: null, score: null };
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-green-500/10 border border-green-500/30 rounded-xl p-4">
+        <h3 className="text-sm font-semibold text-green-300 mb-2 flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4" />
+          Sheet Updated Successfully
+        </h3>
+        <p className="text-xs text-green-200/70">
+          {result.updated_players.length} player(s) matched &middot;{" "}
+          {result.unmatched_players.length} unmatched
+        </p>
+      </div>
+
+      {/* Matched Players Table */}
+      {result.updated_players.length > 0 && (
+        <div className="bg-gray-800/50 border border-gray-700 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-700">
+            <h4 className="text-sm font-semibold text-white">
+              Matched Players ({result.updated_players.length})
+            </h4>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-gray-400 text-xs uppercase border-b border-gray-700/50">
+                  <th className="text-left px-4 py-2">Scraped Name</th>
+                  <th className="text-left px-4 py-2">Sheet Name</th>
+                  <th className="text-center px-3 py-2">Match %</th>
+                  <th className="text-center px-3 py-2">Prev</th>
+                  <th className="text-center px-3 py-2">Added</th>
+                  <th className="text-center px-3 py-2">New</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.updated_players.map((p, i) => (
+                  <tr key={i} className="border-b border-gray-700/30 hover:bg-gray-700/20">
+                    <td className="px-4 py-2 text-gray-300">{p.scraped_name}</td>
+                    <td className="px-4 py-2 font-medium text-white">{p.matched_name}</td>
+                    <td className="text-center px-3 py-2">
+                      <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-medium ${
+                        p.match_score >= 90
+                          ? "bg-emerald-500/20 text-emerald-300"
+                          : p.match_score >= 70
+                          ? "bg-yellow-500/20 text-yellow-300"
+                          : "bg-red-500/20 text-red-300"
+                      }`}>
+                        {p.match_score}%
+                      </span>
+                    </td>
+                    <td className="text-center px-3 py-2 text-gray-400">{p.previous_points}</td>
+                    <td className="text-center px-3 py-2 text-emerald-400">+{p.added_points}</td>
+                    <td className="text-center px-3 py-2 font-semibold text-white">{p.new_points}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Unmatched Players — interactive correction form (review mode) or read-only (history) */}
+      {result.unmatched_players.length > 0 && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4">
+          <h4 className="text-sm font-semibold text-red-300 mb-2 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4" />
+            Unmatched Players ({result.unmatched_players.length})
+          </h4>
+
+          {!readOnly && onRetry ? (
+            <>
+              <p className="text-xs text-red-200/70 mb-4">
+                Type the correct name (as it appears in the Google Sheet) for each player, then click "Retry Update".
+              </p>
+              <div className="space-y-3">
+                {result.unmatched_players.map((raw) => {
+                  const { displayKey, scrapedName, bestMatch, score } = parseUnmatched(raw);
+                  return (
+                    <div key={displayKey} className="flex items-center gap-3 flex-wrap">
+                      <div className="min-w-[180px]">
+                        <span className="text-sm font-medium text-red-200">{scrapedName}</span>
+                        {bestMatch && (
+                          <span className="ml-2 text-xs text-gray-500">
+                            closest: {bestMatch} ({score}%)
+                          </span>
+                        )}
+                      </div>
+                      <input
+                        type="text"
+                        placeholder={bestMatch || "Correct sheet name"}
+                        value={corrections[displayKey] || ""}
+                        onChange={(e) =>
+                          setCorrections((prev) => ({ ...prev, [displayKey]: e.target.value }))
+                        }
+                        className="flex-1 min-w-[200px] bg-gray-800 border border-gray-600 rounded-lg px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+              <button
+                onClick={handleRetryClick}
+                disabled={retryLoading || Object.values(corrections).every((v) => !v.trim())}
+                className="mt-4 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg flex items-center gap-2 transition-colors"
+              >
+                {retryLoading ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Send className="w-4 h-4" />
+                )}
+                Retry Update
+              </button>
+            </>
+          ) : (
+            <div className="flex flex-wrap gap-2 mt-2">
+              {result.unmatched_players.map((raw, i) => {
+                const { scrapedName } = parseUnmatched(raw);
+                return (
+                  <span
+                    key={i}
+                    className="px-3 py-1 rounded-lg bg-red-500/20 text-red-300 text-xs font-medium"
+                  >
+                    {scrapedName}
+                  </span>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>

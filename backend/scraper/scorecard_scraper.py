@@ -456,6 +456,21 @@ def _parse_dismissal(batter_name: str, dismissal_text: str) -> DismissalDetail:
             fielder_name=bowler,  # bowler is also the fielder
         )
 
+    # "c sub (FielderName) b BowlerName" — substitute fielder catch
+    sub_caught_match = re.match(
+        r"c\s+sub\s+\((.+?)\)\s+b\s+(.+)", text, re.IGNORECASE
+    )
+    if sub_caught_match:
+        fielder = _clean_player_name(sub_caught_match.group(1))
+        bowler = _clean_player_name(sub_caught_match.group(2))
+        return DismissalDetail(
+            batter_name=batter_name,
+            dismissal_type="caught",
+            bowler_name=bowler,
+            fielder_name=fielder,
+            is_substitute=True,
+        )
+
     # "c FielderName b BowlerName"  or  "c †FielderName b BowlerName"
     caught_match = re.match(
         r"c\s+[\u2020]?(.+?)\s+b\s+(.+)", text, re.IGNORECASE
@@ -565,6 +580,8 @@ def _derive_fielding(dismissals: list[DismissalDetail]) -> list[FieldingEntry]:
                 d.fielder_name, FieldingEntry(name=d.fielder_name)
             )
             entry.catches += 1
+            if d.is_substitute:
+                entry.is_substitute = True
 
         elif d.dismissal_type == "stumped" and d.fielder_name:
             entry = fielding_map.setdefault(

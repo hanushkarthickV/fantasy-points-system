@@ -69,6 +69,7 @@ class FieldingEntry(BaseModel):
     stumpings: int = 0
     run_out_direct: int = 0
     run_out_indirect: int = 0
+    is_substitute: bool = False     # True when fielder came on as a substitute
 
 
 class DismissalDetail(BaseModel):
@@ -78,6 +79,7 @@ class DismissalDetail(BaseModel):
     fielder_name: Optional[str] = None
     is_direct_run_out: bool = False
     is_keeper_catch: bool = False   # True when † indicates wicketkeeper took the catch
+    is_substitute: bool = False     # True when fielder is a substitute (e.g. "c sub (Name)")
 
 
 class InningsData(BaseModel):

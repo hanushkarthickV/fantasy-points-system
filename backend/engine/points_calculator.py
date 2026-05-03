@@ -79,11 +79,23 @@ def calculate_match_points(
         for name in innings.did_not_bat:
             _get_or_create(player_map, name, batting_team)
 
+    # ── Identify substitute fielders (they don't get Playing XI bonus) ────
+    substitute_names: set[str] = set()
+    for innings in metadata.innings:
+        for entry in innings.fielding:
+            if entry.is_substitute:
+                substitute_names.add(entry.name)
+    if substitute_names:
+        logger.info("[CALC] Substitute fielders (no Playing XI bonus): %s", substitute_names)
+
     # ── Playing XI bonus: +4 for every player who featured ───────────────
     PLAYING_XI_BONUS = 4
     for pp in player_map.values():
-        pp.playing_xi_bonus = PLAYING_XI_BONUS
-        pp.total_points += PLAYING_XI_BONUS
+        if pp.name in substitute_names:
+            pp.playing_xi_bonus = 0
+        else:
+            pp.playing_xi_bonus = PLAYING_XI_BONUS
+            pp.total_points += PLAYING_XI_BONUS
 
     for pp in player_map.values():
         logger.debug("[CALC] %s (%s): bat=%s bowl=%s field=%s xi=%d total=%d",

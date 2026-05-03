@@ -39,9 +39,13 @@ _MATCH_NUM_RE = re.compile(r"(\d+)(?:st|nd|rd|th)\s+Match", re.IGNORECASE)
 _IPL_LINK_RE = re.compile(
     r'href="(/series/ipl-2026-1510719/[^"]*?-(\d{7})/full-scorecard)"'
 )
+# Also match live-cricket-score links (ongoing/scheduled matches)
+_IPL_LIVE_RE = re.compile(
+    r'href="(/series/ipl-2026-1510719/[^"]*?-(\d{7})/live-cricket-score)"'
+)
 # Extract match slug parts: "team1-vs-team2-Nth-match-ID"
 _SLUG_RE = re.compile(
-    r"/series/ipl-2026-1510719/(.+)-(\d{7})/full-scorecard"
+    r"/series/ipl-2026-1510719/(.+)-(\d{7})/(?:full-scorecard|live-cricket-score)"
 )
 
 
@@ -49,60 +53,74 @@ def _parse_schedule_page(html: str) -> list[dict]:
     """
     Parse the ESPN schedule page HTML and return a list of match dicts.
 
-    Uses regex to find all IPL 2026 scorecard links and extracts info from
-    the URL slug (e.g. 'rajasthan-royals-vs-delhi-capitals-43rd-match').
+    Uses regex to find all IPL 2026 scorecard links AND live-cricket-score
+    links. Matches with a scorecard link are marked completed; those with
+    only a live link are marked scheduled (or ongoing).
     """
     matches: list[dict] = []
     seen_ids: set[str] = set()
+    # Track which IDs have scorecard links
+    scorecard_ids: set[str] = set()
+    for m in _IPL_LINK_RE.finditer(html):
+        scorecard_ids.add(m.group(2))
 
+    # Process scorecard links first (completed matches)
     for href_match in _IPL_LINK_RE.finditer(html):
         href = href_match.group(1)
         espn_id = href_match.group(2)
-
         if espn_id in seen_ids:
             continue
         seen_ids.add(espn_id)
+        _add_match(matches, href, espn_id, is_completed=True)
 
-        full_url = f"https://www.espncricinfo.com{href}"
-
-        # Parse slug for team names and match number
-        slug_match = _SLUG_RE.search(href)
-        title_text = ""
-        team1 = None
-        team2 = None
-        match_num = None
-
-        if slug_match:
-            slug = slug_match.group(1)  # e.g. "rajasthan-royals-vs-delhi-capitals-43rd-match"
-            # Extract match number
-            num_match = _MATCH_NUM_RE.search(slug.replace("-", " "))
-            if num_match:
-                match_num = int(num_match.group(1))
-
-            # Extract teams from slug (everything before "Nth-match")
-            teams_part = re.sub(r"-\d+(?:st|nd|rd|th)-match$", "", slug)
-            if "-vs-" in teams_part:
-                parts = teams_part.split("-vs-")
-                team1 = parts[0].replace("-", " ").title()
-                team2 = parts[1].replace("-", " ").title()
-
-            title_text = slug.replace("-", " ").title()
-
-        matches.append({
-            "espn_match_id": espn_id,
-            "match_number": match_num,
-            "title": title_text or f"Match {espn_id}",
-            "team1": team1,
-            "team2": team2,
-            "venue": None,
-            "match_date": None,
-            "scorecard_url": full_url,
-            "result_text": None,
-            "is_completed": True,  # has scorecard link → completed
-        })
+    # Process live-cricket-score links (ongoing/scheduled matches)
+    for href_match in _IPL_LIVE_RE.finditer(html):
+        href = href_match.group(1)
+        espn_id = href_match.group(2)
+        if espn_id in seen_ids:
+            continue
+        seen_ids.add(espn_id)
+        # Build the scorecard URL even though it may not exist yet
+        sc_href = href.replace("/live-cricket-score", "/full-scorecard")
+        _add_match(matches, sc_href, espn_id, is_completed=False)
 
     logger.info("[DISCOVERY] Parsed %d IPL 2026 matches from schedule page", len(matches))
     return matches
+
+
+def _add_match(matches: list[dict], href: str, espn_id: str, is_completed: bool):
+    """Helper to parse a match URL slug and append to matches list."""
+    full_url = f"https://www.espncricinfo.com{href}"
+    slug_match = _SLUG_RE.search(href)
+    title_text = ""
+    team1 = None
+    team2 = None
+    match_num = None
+
+    if slug_match:
+        slug = slug_match.group(1)
+        num_match = _MATCH_NUM_RE.search(slug.replace("-", " "))
+        if num_match:
+            match_num = int(num_match.group(1))
+        teams_part = re.sub(r"-\d+(?:st|nd|rd|th)-match$", "", slug)
+        if "-vs-" in teams_part:
+            parts = teams_part.split("-vs-")
+            team1 = parts[0].replace("-", " ").title()
+            team2 = parts[1].replace("-", " ").title()
+        title_text = slug.replace("-", " ").title()
+
+    matches.append({
+        "espn_match_id": espn_id,
+        "match_number": match_num,
+        "title": title_text or f"Match {espn_id}",
+        "team1": team1,
+        "team2": team2,
+        "venue": None,
+        "match_date": None,
+        "scorecard_url": full_url,
+        "result_text": None,
+        "is_completed": is_completed,
+    })
 
 
 def discover_matches() -> int:
@@ -136,6 +154,7 @@ def discover_matches() -> int:
                 # Update status if match was scheduled and is now completed
                 if existing.status == MatchStatus.SCHEDULED and m["is_completed"]:
                     existing.status = MatchStatus.COMPLETED
+                    existing.scorecard_url = m["scorecard_url"]
                     existing.result_text = m["result_text"]
                     logger.info("[DISCOVERY] Match %s moved to COMPLETED", m["espn_match_id"])
                 continue

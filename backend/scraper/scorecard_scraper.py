@@ -101,9 +101,11 @@ def scrape_scorecard(
         except Exception as exc:
             last_exc = exc
             error_msg = str(exc).lower()
-            is_retryable = any(kw in error_msg for kw in ("timeout", "timed out", "connection", "500", "502", "503"))
+            is_retryable = any(kw in error_msg for kw in ("timeout", "timed out", "connection", "500", "502", "503", "403"))
             if is_retryable and attempt < SCRAPE_MAX_RETRIES:
-                wait_secs = attempt * 3
+                # Longer backoff for 403 (rate-limit) vs network errors
+                is_rate_limited = "403" in error_msg
+                wait_secs = (attempt * 10) if is_rate_limited else (attempt * 3)
                 emit("retry", f"Error on attempt {attempt}/{SCRAPE_MAX_RETRIES}, retrying in {wait_secs}s...")
                 logger.warning(
                     "[SCRAPER] Attempt %d/%d failed (%s), retrying in %ds...",

@@ -33,8 +33,8 @@ SPECIALISM_COLUMN = "Specialism"
 FUZZY_AUTO_MATCH_THRESHOLD = 80
 FUZZY_REVIEW_THRESHOLD = 60
 
-# ── Selenium ───────────────────────────────────────────────────────────────────
+# ── Scraping ──────────────────────────────────────────────────────────────────
 BROWSER_HEADLESS = True
 PAGE_LOAD_TIMEOUT = 60
 ELEMENT_WAIT_TIMEOUT = 20
-SCRAPE_MAX_RETRIES = 3
+SCRAPE_MAX_RETRIES = 4

@@ -111,7 +111,14 @@ def _process_one_job() -> bool:
             logger.info("[WORKER] Extraction + points complete for match #%s", match.match_number)
 
         except Exception as e:
-            match.status = MatchStatus.EXTRACTION_FAILED.value
+            # If this was a re-extract of a manually_extracted/sheet_updated match,
+            # restore the original status so the UI shows "Re-extract" (not "Extract")
+            # and skip_review will be set again on the next attempt.
+            if job.skip_review:
+                match.status = MatchStatus.MANUALLY_EXTRACTED.value
+                logger.info("[WORKER] skip_review=True → restoring status to manually_extracted for match #%s", match.match_number)
+            else:
+                match.status = MatchStatus.EXTRACTION_FAILED.value
             extraction.status = "failed"
             extraction.error_message = str(e)[:500]
             extraction.completed_at = datetime.utcnow()
@@ -130,13 +137,20 @@ def _process_one_job() -> bool:
         db.close()
 
 
+# Cooldown between jobs to avoid ESPN rate-limiting (403)
+_JOB_COOLDOWN_SECS = 8
+
+
 def _worker_loop():
     """Main worker loop — polls queue every 3 seconds."""
     logger.info("[WORKER] Extraction worker started")
     while not _stop_event.is_set():
         try:
             had_work = _process_one_job()
-            if not had_work:
+            if had_work:
+                # Cooldown between consecutive jobs to avoid ESPN 403
+                _stop_event.wait(timeout=_JOB_COOLDOWN_SECS)
+            else:
                 # No jobs — sleep before next poll
                 _stop_event.wait(timeout=3)
         except Exception:

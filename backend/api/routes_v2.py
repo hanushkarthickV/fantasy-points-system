@@ -57,6 +57,7 @@ class MatchListItem(BaseModel):
     result_text: str | None
     scorecard_url: str | None
     extracted_at: datetime | None
+    is_reextract: bool = False
 
     class Config:
         from_attributes = True
@@ -116,8 +117,26 @@ async def list_matches(
     sync_cfg = db.query(AppConfig).filter_by(key="last_sync_time").first()
     last_sync = sync_cfg.value if sync_cfg else None
 
+    # Build response items, marking failed re-extracts so frontend
+    # can show "Re-extract" instead of "Extract".
+    items: list[MatchListItem] = []
+    for m in matches:
+        item = MatchListItem.model_validate(m)
+        if m.status == MatchStatus.EXTRACTION_FAILED.value:
+            has_skip = (
+                db.query(ExtractionQueue)
+                .filter(
+                    ExtractionQueue.match_id == m.id,
+                    ExtractionQueue.skip_review == True,
+                )
+                .first()
+            )
+            if has_skip:
+                item.is_reextract = True
+        items.append(item)
+
     return MatchListResponse(
-        matches=[MatchListItem.model_validate(m) for m in matches],
+        matches=items,
         total=total,
         last_sync_time=last_sync,
     )
@@ -156,6 +175,20 @@ async def queue_extraction(match_id: int, db: Session = Depends(get_db)):
         MatchStatus.MANUALLY_EXTRACTED.value,
         MatchStatus.SHEET_UPDATED.value,
     )
+
+    # If this is a retry after failure, check if a previous attempt had
+    # skip_review set (i.e. the match was originally manually_extracted).
+    if not was_already_done and match.status == MatchStatus.EXTRACTION_FAILED.value:
+        prev_skip = (
+            db.query(ExtractionQueue)
+            .filter(
+                ExtractionQueue.match_id == match_id,
+                ExtractionQueue.skip_review == True,
+            )
+            .first()
+        )
+        if prev_skip:
+            was_already_done = True
 
     # Add to queue and mark match as queued
     job = ExtractionQueue(match_id=match_id, skip_review=was_already_done)

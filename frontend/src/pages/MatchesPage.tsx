@@ -261,15 +261,20 @@ export default function MatchesPage({ email, onLogout }: MatchesPageProps) {
       return actions;
     }
 
-    // Extract button for completed / failed
+    // Extract / Re-extract button for completed / failed
     if (match.status === "completed" || match.status === "extraction_failed") {
+      const isReextract = match.status === "extraction_failed" && match.is_reextract;
       actions.push(
         <button
           key="extract"
           onClick={() => handleQueueExtract(match.id)}
-          className="px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors"
+          className={`px-3 py-1.5 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors ${
+            isReextract
+              ? "bg-gray-600 hover:bg-gray-500"
+              : "bg-indigo-500 hover:bg-indigo-600"
+          }`}
         >
-          <Play className="w-3 h-3" /> Extract
+          <Play className="w-3 h-3" /> {isReextract ? "Re-extract" : "Extract"}
         </button>
       );
     }

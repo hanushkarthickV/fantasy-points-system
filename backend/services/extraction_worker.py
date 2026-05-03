@@ -111,14 +111,7 @@ def _process_one_job() -> bool:
             logger.info("[WORKER] Extraction + points complete for match #%s", match.match_number)
 
         except Exception as e:
-            # If this was a re-extract of a manually_extracted/sheet_updated match,
-            # restore the original status so the UI shows "Re-extract" (not "Extract")
-            # and skip_review will be set again on the next attempt.
-            if job.skip_review:
-                match.status = MatchStatus.MANUALLY_EXTRACTED.value
-                logger.info("[WORKER] skip_review=True → restoring status to manually_extracted for match #%s", match.match_number)
-            else:
-                match.status = MatchStatus.EXTRACTION_FAILED.value
+            match.status = MatchStatus.EXTRACTION_FAILED.value
             extraction.status = "failed"
             extraction.error_message = str(e)[:500]
             extraction.completed_at = datetime.utcnow()

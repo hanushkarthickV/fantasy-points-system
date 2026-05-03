@@ -56,6 +56,7 @@ export interface MatchItem {
   result_text: string | null;
   scorecard_url: string | null;
   extracted_at: string | null;
+  is_reextract?: boolean;
 }
 
 export interface MatchListResponse {

@@ -9,6 +9,7 @@ The schedule page is static HTML, so we use requests + BeautifulSoup
 from __future__ import annotations
 
 import re
+import time
 import urllib3
 from datetime import datetime
 from typing import Optional
@@ -148,14 +149,21 @@ def discover_matches() -> int:
         "Sec-Fetch-User": "?1",
         "Cache-Control": "max-age=0",
     }
-    try:
-        session = requests.Session()
-        session.headers.update(headers)
-        resp = session.get(SCHEDULE_URL, timeout=30, verify=False)
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        logger.error("[DISCOVERY] Failed to fetch schedule page: %s", e)
-        return 0
+    session = requests.Session()
+    session.headers.update(headers)
+    resp = None
+    for attempt in range(1, 4):
+        try:
+            resp = session.get(SCHEDULE_URL, timeout=30, verify=False)
+            resp.raise_for_status()
+            break
+        except requests.RequestException as e:
+            logger.warning("[DISCOVERY] Attempt %d/3 failed: %s", attempt, e)
+            if attempt < 3:
+                time.sleep(attempt * 5)
+            else:
+                logger.error("[DISCOVERY] All 3 attempts failed to fetch schedule page")
+                return 0
 
     parsed = _parse_schedule_page(resp.text)
     if not parsed:

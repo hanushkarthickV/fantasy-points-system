@@ -50,6 +50,7 @@ async extraction queue, points review, and sheet update workflow backed by Postg
 | match_id       | int FK      | References `matches.id`               |
 | status         | varchar(32) | `pending` / `processing` / `done` / `failed` |
 | error_message  | text        | Error details if failed               |
+| skip_review    | boolean     | If true, worker sets match to `sheet_updated` directly |
 | created_at     | datetime    | When queued                           |
 | started_at     | datetime    | When worker picked it up              |
 | completed_at   | datetime    | When processing finished              |
@@ -66,19 +67,21 @@ Simple email + hashed password for JWT auth.
 
 ```
 SCHEDULED → COMPLETED → QUEUED → EXTRACTING → POINTS_CALCULATED → SHEET_UPDATED
-                  ↑                    |
-                  |                    ↓
-                  ←──── EXTRACTION_FAILED
+                  ↑                    |                                |
+                  |                    ↓                                |
+                  ←──── EXTRACTION_FAILED ──────────────────────────────┘
+
+MANUALLY_EXTRACTED → QUEUED → EXTRACTING → SHEET_UPDATED (skip_review)
 ```
 
-- **SCHEDULED**: Match discovered but not yet played. All actions disabled ("Awaiting result").
+- **SCHEDULED**: Match discovered but not yet played. All actions disabled ("Awaiting result"). Only today's scheduled matches (IST) are shown in the listing.
 - **COMPLETED**: Match played, scorecard available. User can click "Extract".
 - **QUEUED**: Extraction request is in the queue waiting to be processed.
 - **EXTRACTING**: Background worker is scraping + calculating points.
 - **POINTS_CALCULATED**: Extraction done, points ready. User sees "Review Points" button.
-- **SHEET_UPDATED**: Points pushed to Google Sheets. User sees "History" button.
+- **SHEET_UPDATED**: Points pushed to Google Sheets. User sees "History" button (read-only).
 - **EXTRACTION_FAILED**: Something went wrong. User can retry with "Extract".
-- **MANUALLY_EXTRACTED**: Matches 1–42 (pre-V2, already processed via V1).
+- **MANUALLY_EXTRACTED**: Matches 1–42 (pre-V2, already processed via V1). Re-extracting these skips review and goes directly to `SHEET_UPDATED`.
 
 ---
 
@@ -144,6 +147,9 @@ we use a **background worker thread** that:
 4. **Review screen stays open** after sheet update — shows matched/unmatched results
 5. **History button** — view points for any previously processed match
 6. **Scheduled matches** — displayed but actions disabled with "Awaiting result" tooltip
+7. **Skip review for re-extracts** — manually_extracted/sheet_updated matches go straight to history after re-extraction
+8. **Today-only scheduled filter** — only today's scheduled matches (IST) appear in the listing
+9. **Live match discovery** — sync detects both completed (`/full-scorecard`) and scheduled (`/live-cricket-score`) matches from ESPN
 
 ---
 

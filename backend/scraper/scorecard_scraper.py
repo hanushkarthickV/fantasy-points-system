@@ -1,14 +1,18 @@
 """
 Scrapes ESPNcricinfo full-scorecard pages and returns structured MatchMetadata.
 
-Uses BrowserWrapper for page loading and ElementWrapper for HTML parsing.
+Uses HTTP requests (no browser/Selenium) since ESPN serves scorecard HTML
+server-side. ElementWrapper handles HTML parsing via BeautifulSoup.
 """
 
 from __future__ import annotations
 
 import re
 import time
+import urllib3
 from typing import Optional
+
+import requests
 
 from backend.logger import get_logger
 from backend.config import SCRAPE_MAX_RETRIES
@@ -20,10 +24,30 @@ from backend.models.schemas import (
     InningsData,
     MatchMetadata,
 )
-from backend.wrappers.browser_wrapper import BrowserWrapper
 from backend.wrappers.element_wrapper import ElementWrapper
 
+# Suppress InsecureRequestWarning for corporate proxy environments
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 logger = get_logger(__name__)
+
+_HTTP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "DNT": "1",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Cache-Control": "max-age=0",
+}
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -37,10 +61,13 @@ def scrape_scorecard(
     on_progress: ProgressCallback = None,
 ) -> MatchMetadata:
     """
-    Open the ESPNcricinfo scorecard at *url*, parse it, and return a
-    fully-populated ``MatchMetadata`` object.
+    Fetch the ESPNcricinfo scorecard at *url* via HTTP (no browser needed)
+    and return a fully-populated ``MatchMetadata`` object.
 
-    Retries up to SCRAPE_MAX_RETRIES times on timeout/page-load failures.
+    ESPN serves scorecard HTML server-side, so we use requests instead of
+    Selenium, which eliminates ~300 MB of Chrome memory overhead.
+
+    Retries up to SCRAPE_MAX_RETRIES times on network/timeout failures.
     If *on_progress* is provided, it is called with (step, message) at each stage.
     """
 
@@ -55,15 +82,16 @@ def scrape_scorecard(
     last_exc: Exception | None = None
     for attempt in range(1, SCRAPE_MAX_RETRIES + 1):
         try:
-            emit("browser_launch", f"Launching Chrome browser (attempt {attempt}/{SCRAPE_MAX_RETRIES})...")
-            with BrowserWrapper() as browser:
-                emit("page_load", "Navigating to ESPNcricinfo scorecard...")
-                browser.open(url)
-                emit("waiting_render", "Waiting for scorecard table to render...")
-                browser.wait_for_element("table.ci-scorecard-table")
-                emit("extracting_html", "Scorecard visible — extracting page HTML...")
-                html = browser.get_page_source()
-                logger.info("[SCRAPER] Got page source (%d chars) on attempt %d", len(html), attempt)
+            emit("fetch", f"Fetching scorecard page (attempt {attempt}/{SCRAPE_MAX_RETRIES})...")
+            session = requests.Session()
+            session.headers.update(_HTTP_HEADERS)
+            resp = session.get(url, timeout=30, verify=False)
+            resp.raise_for_status()
+            html = resp.text
+            logger.info("[SCRAPER] Got page HTML (%d chars) on attempt %d", len(html), attempt)
+
+            if "ci-scorecard-table" not in html:
+                raise ValueError("Scorecard table not found in page HTML — match may not be completed yet")
 
             emit("parse_batting", "Parsing batting data...")
             result = _parse_scorecard_html(html, match_id, url, on_progress=on_progress)
@@ -73,17 +101,16 @@ def scrape_scorecard(
         except Exception as exc:
             last_exc = exc
             error_msg = str(exc).lower()
-            is_timeout = "timeout" in error_msg or "timed out" in error_msg
-            if is_timeout and attempt < SCRAPE_MAX_RETRIES:
+            is_retryable = any(kw in error_msg for kw in ("timeout", "timed out", "connection", "500", "502", "503"))
+            if is_retryable and attempt < SCRAPE_MAX_RETRIES:
                 wait_secs = attempt * 3
-                emit("retry", f"Timeout on attempt {attempt}/{SCRAPE_MAX_RETRIES}, retrying in {wait_secs}s...")
+                emit("retry", f"Error on attempt {attempt}/{SCRAPE_MAX_RETRIES}, retrying in {wait_secs}s...")
                 logger.warning(
-                    "[SCRAPER] Attempt %d/%d timed out, retrying in %ds...",
-                    attempt, SCRAPE_MAX_RETRIES, wait_secs,
+                    "[SCRAPER] Attempt %d/%d failed (%s), retrying in %ds...",
+                    attempt, SCRAPE_MAX_RETRIES, str(exc)[:100], wait_secs,
                 )
                 time.sleep(wait_secs)
                 continue
-            # Non-timeout error or last attempt — re-raise
             raise
 
     # Should not reach here, but just in case

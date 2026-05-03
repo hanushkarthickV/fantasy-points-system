@@ -9,10 +9,9 @@ from __future__ import annotations
 
 import re
 import time
-import urllib3
 from typing import Optional
 
-import requests
+import cloudscraper
 
 from backend.logger import get_logger
 from backend.config import SCRAPE_MAX_RETRIES
@@ -26,28 +25,7 @@ from backend.models.schemas import (
 )
 from backend.wrappers.element_wrapper import ElementWrapper
 
-# Suppress InsecureRequestWarning for corporate proxy environments
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 logger = get_logger(__name__)
-
-_HTTP_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "DNT": "1",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Cache-Control": "max-age=0",
-}
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -83,9 +61,8 @@ def scrape_scorecard(
     for attempt in range(1, SCRAPE_MAX_RETRIES + 1):
         try:
             emit("fetch", f"Fetching scorecard page (attempt {attempt}/{SCRAPE_MAX_RETRIES})...")
-            session = requests.Session()
-            session.headers.update(_HTTP_HEADERS)
-            resp = session.get(url, timeout=30, verify=False)
+            scraper = cloudscraper.create_scraper()
+            resp = scraper.get(url, timeout=30)
             resp.raise_for_status()
             html = resp.text
             logger.info("[SCRAPER] Got page HTML (%d chars) on attempt %d", len(html), attempt)

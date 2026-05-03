@@ -10,15 +10,11 @@ from __future__ import annotations
 
 import re
 import time
-import urllib3
 from datetime import datetime
 from typing import Optional
 
-import requests
+import cloudscraper
 from bs4 import BeautifulSoup
-
-# Suppress InsecureRequestWarning for corporate proxy environments
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from backend.db.base import SessionLocal
 from backend.db.models import Match, MatchStatus
@@ -132,32 +128,14 @@ def discover_matches() -> int:
     """
     logger.info("[DISCOVERY] Starting match discovery from %s", SCHEDULE_URL)
     
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "DNT": "1",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "Cache-Control": "max-age=0",
-    }
-    session = requests.Session()
-    session.headers.update(headers)
+    scraper = cloudscraper.create_scraper()
     resp = None
     for attempt in range(1, 4):
         try:
-            resp = session.get(SCHEDULE_URL, timeout=30, verify=False)
+            resp = scraper.get(SCHEDULE_URL, timeout=30)
             resp.raise_for_status()
             break
-        except requests.RequestException as e:
+        except Exception as e:
             logger.warning("[DISCOVERY] Attempt %d/3 failed: %s", attempt, e)
             if attempt < 3:
                 time.sleep(attempt * 5)

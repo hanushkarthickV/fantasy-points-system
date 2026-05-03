@@ -13,6 +13,7 @@ import enum
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Integer,
@@ -106,6 +107,7 @@ class ExtractionQueue(Base):
     match_id = Column(Integer, nullable=False, index=True)
     status = Column(String(32), nullable=False, default=QueueStatus.PENDING.value, server_default="pending")
     error_message = Column(Text, nullable=True)
+    skip_review = Column(Boolean, nullable=False, default=False, server_default="false")
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)

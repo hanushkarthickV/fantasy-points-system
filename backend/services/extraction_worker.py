@@ -94,7 +94,14 @@ def _process_one_job() -> bool:
 
             points = calculate_match_points(metadata, bowler_names)
             match.points_json = points.model_dump()
-            match.status = MatchStatus.POINTS_CALCULATED.value
+
+            # If match was previously manually_extracted / sheet_updated,
+            # skip the review step and go straight to sheet_updated (read-only history).
+            if job.skip_review:
+                match.status = MatchStatus.SHEET_UPDATED.value
+                logger.info("[WORKER] skip_review=True → status set to sheet_updated for match #%s", match.match_number)
+            else:
+                match.status = MatchStatus.POINTS_CALCULATED.value
 
             # Mark job done
             job.status = QueueStatus.DONE.value

@@ -150,8 +150,15 @@ async def queue_extraction(match_id: int, db: Session = Depends(get_db)):
     if existing:
         raise HTTPException(409, "Extraction already in queue")
 
+    # Remember if this match was already pushed to sheet (manually_extracted
+    # or sheet_updated). The worker will skip straight to sheet_updated status.
+    was_already_done = match.status in (
+        MatchStatus.MANUALLY_EXTRACTED.value,
+        MatchStatus.SHEET_UPDATED.value,
+    )
+
     # Add to queue and mark match as queued
-    job = ExtractionQueue(match_id=match_id)
+    job = ExtractionQueue(match_id=match_id, skip_review=was_already_done)
     db.add(job)
     match.status = MatchStatus.QUEUED.value
     db.commit()

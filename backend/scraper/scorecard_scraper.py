@@ -11,7 +11,7 @@ import re
 import time
 from typing import Optional
 
-import cloudscraper
+from curl_cffi import requests as cffi_requests
 
 from backend.logger import get_logger
 from backend.config import SCRAPE_MAX_RETRIES
@@ -61,8 +61,7 @@ def scrape_scorecard(
     for attempt in range(1, SCRAPE_MAX_RETRIES + 1):
         try:
             emit("fetch", f"Fetching scorecard page (attempt {attempt}/{SCRAPE_MAX_RETRIES})...")
-            scraper = cloudscraper.create_scraper()
-            resp = scraper.get(url, timeout=30)
+            resp = cffi_requests.get(url, impersonate="chrome", timeout=30, verify=False)
             resp.raise_for_status()
             html = resp.text
             logger.info("[SCRAPER] Got page HTML (%d chars) on attempt %d", len(html), attempt)

@@ -13,7 +13,7 @@ import time
 from datetime import datetime
 from typing import Optional
 
-import cloudscraper
+from curl_cffi import requests as cffi_requests
 from bs4 import BeautifulSoup
 
 from backend.db.base import SessionLocal
@@ -128,11 +128,10 @@ def discover_matches() -> int:
     """
     logger.info("[DISCOVERY] Starting match discovery from %s", SCHEDULE_URL)
     
-    scraper = cloudscraper.create_scraper()
     resp = None
     for attempt in range(1, 4):
         try:
-            resp = scraper.get(SCHEDULE_URL, timeout=30)
+            resp = cffi_requests.get(SCHEDULE_URL, impersonate="chrome", timeout=30, verify=False)
             resp.raise_for_status()
             break
         except Exception as e:

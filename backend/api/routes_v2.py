@@ -14,7 +14,7 @@ Endpoints:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -90,12 +90,27 @@ async def list_matches(
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
-    """List all discovered matches with optional status filter."""
+    """List all discovered matches with optional status filter.
+
+    Scheduled matches are filtered to today only (IST) so the list
+    stays focused on upcoming games.
+    """
+    IST = timezone(timedelta(hours=5, minutes=30))
+    today_ist = datetime.now(IST).date()
+
     q = db.query(Match).order_by(Match.match_number.desc().nullslast())
     if status:
         q = q.filter(Match.status == status)
-    total = q.count()
-    matches = q.offset(offset).limit(limit).all()
+
+    # Exclude scheduled matches that are NOT today
+    all_rows = q.all()
+    matches = [
+        m for m in all_rows
+        if m.status != MatchStatus.SCHEDULED
+        or (m.match_date is not None and m.match_date.date() == today_ist)
+    ]
+    total = len(matches)
+    matches = matches[offset : offset + limit]
 
     # Fetch persistent last sync time
     sync_cfg = db.query(AppConfig).filter_by(key="last_sync_time").first()
